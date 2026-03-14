@@ -1,0 +1,50 @@
+FROM alpine:3.23
+
+RUN apk add --no-cache \
+    bash \
+    build-base \
+    cargo \
+    clang21 \
+    clang21-libclang \
+    coreutils \
+    git \
+    linux-pam \
+    linux-pam-dev \
+    llvm21-dev \
+    pkgconf \
+    python3 \
+    rust \
+    shadow \
+    su-exec \
+    util-linux
+
+ARG AUTH_BACKEND=plain
+ARG TIMESTAMP=off
+
+ENV LLVM_CONFIG_PATH=/usr/bin/llvm-config-21
+ENV LIBCLANG_PATH=/usr/lib/llvm21/lib
+
+COPY . /src/OpenDoas-rs
+COPY conformance/fixtures/users/base-users.sh /usr/local/bin/base-users.sh
+
+WORKDIR /src/OpenDoas-rs
+
+RUN set -eu; \
+    features="auth-plain"; \
+    case "$AUTH_BACKEND" in \
+        none) features="auth-none" ;; \
+        plain) features="auth-plain" ;; \
+        pam) features="auth-pam" ;; \
+        *) echo "unsupported auth backend: $AUTH_BACKEND" >&2; exit 1 ;; \
+    esac; \
+    AUTH_MODE="$AUTH_BACKEND" OPENDOAS_RS_TIMESTAMP="$TIMESTAMP" cargo build --release --no-default-features --features "$features"; \
+    install -Dm4755 "target/release/OpenDoas-rs" /usr/bin/doas; \
+    /usr/local/bin/base-users.sh; \
+    mkdir -p /etc/pam.d; \
+    printf '%s\n' \
+      'auth required pam_unix.so' \
+      'account required pam_unix.so' \
+      'session required pam_unix.so' > /etc/pam.d/doas
+
+WORKDIR /
+CMD ["/bin/sh", "-lc", "rm -f /tmp/conformance-syslog.log; syslogd -O /tmp/conformance-syslog.log; sleep infinity"]

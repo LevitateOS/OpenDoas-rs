@@ -1,0 +1,40 @@
+FROM alpine:3.23
+
+RUN apk add --no-cache \
+    bash \
+    bison \
+    build-base \
+    coreutils \
+    linux-pam \
+    linux-pam-dev \
+    python3 \
+    shadow \
+    su-exec \
+    util-linux
+
+ARG AUTH_BACKEND=shadow
+ARG TIMESTAMP=off
+
+COPY .reference/OpenDoas /src/OpenDoas
+COPY conformance/fixtures/users/base-users.sh /usr/local/bin/base-users.sh
+
+WORKDIR /src/OpenDoas
+
+RUN set -eu; \
+    auth_flags="--without-pam"; \
+    if [ "$AUTH_BACKEND" = "pam" ]; then auth_flags="--without-shadow"; fi; \
+    ts_flag=""; \
+    if [ "$TIMESTAMP" = "on" ]; then ts_flag="--with-timestamp"; fi; \
+    ./configure --prefix=/usr $auth_flags $ts_flag; \
+    make; \
+    make install; \
+    chmod 4755 /usr/bin/doas; \
+    /usr/local/bin/base-users.sh; \
+    mkdir -p /etc/pam.d; \
+    printf '%s\n' \
+      'auth required pam_unix.so' \
+      'account required pam_unix.so' \
+      'session required pam_unix.so' > /etc/pam.d/doas
+
+WORKDIR /
+CMD ["/bin/sh", "-lc", "rm -f /tmp/conformance-syslog.log; syslogd -O /tmp/conformance-syslog.log; sleep infinity"]

@@ -1,0 +1,3 @@
+alpine_release=3.23
+alpine_package_branch=3.23-stable
+alpine_package_dir=.reference/Alpine-doas-3.23-stable
