@@ -31,11 +31,13 @@ Current assessment: `not production-ready yet`
 
 Reasons:
 
-- there is no enforced CI regression gate yet
+- CI is now present, but release policy and branch protection still need to
+  enforce it
 - the current evidence is strong on one oracle path, but not yet broad across
   multiple real deployment environments
 - no dedicated security review has been completed on the privilege boundary
-- release and operational guidance is still too thin for a root-level tool
+- release and operational guidance now exists, but it still needs real operator
+  validation
 
 ## Required Gates
 
@@ -47,9 +49,9 @@ These are the minimum gates before a production-ready claim should be made.
   [conformance](/home/vince/Projects/rsudoas/conformance)
 - [x] Current suite is green end to end
 - [x] Current upstream `OpenDoas` backlog is modeled
-- [ ] Full suite runs automatically in CI on every change
+- [x] Full suite runs automatically in CI on every change
 - [ ] CI failure blocks release
-- [ ] Release builds are tested from a clean environment, not only a warm local
+- [x] Release builds are tested from a clean environment, not only a warm local
   machine
 
 ### 2. Environment Matrix Gate
@@ -87,25 +89,25 @@ Suggested minimum matrix:
 
 ### 4. Negative Testing Gate
 
-- [ ] Parser fuzzing or equivalent malformed-input stress testing
+- [x] Parser fuzzing or equivalent malformed-input stress testing
 - [ ] Additional fault-injection around auth, persist, and runtime paths
 - [ ] Regression tests for any bugs found during real-world trial use
 - [ ] At least one review pass focused specifically on harness blind spots
 
 ### 5. Operational Gate
 
-- [ ] Installation documentation is complete for each supported auth mode
-- [ ] PAM setup guidance is correct for supported distributions
-- [ ] Upgrade and rollback guidance exists
-- [ ] Failure modes are documented clearly enough for operators
-- [ ] Logging and audit expectations are documented
-- [ ] Safe default examples are provided for configuration
+- [x] Installation documentation is complete for each supported auth mode
+- [x] PAM setup guidance is correct for supported distributions
+- [x] Upgrade and rollback guidance exists
+- [x] Failure modes are documented clearly enough for operators
+- [x] Logging and audit expectations are documented
+- [x] Safe default examples are provided for configuration
 
 ### 6. Release Gate
 
-- [ ] A reproducible release process exists
+- [x] A reproducible release process exists
 - [ ] Release artifacts are built from a clean tree
-- [ ] Versioning and changelog policy are defined
+- [x] Versioning and changelog policy are defined
 - [ ] A release checklist exists and is followed
 - [ ] At least one release-candidate soak period completes without critical
   regressions

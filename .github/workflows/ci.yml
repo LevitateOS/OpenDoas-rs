@@ -65,3 +65,6 @@ jobs:
 
       - name: Run oracle-driven conformance suite
         run: conformance/runner/bin/run-suite.sh
+
+      - name: Run deterministic parser stress pass
+        run: conformance/runner/bin/run-parser-stress.sh --count 20

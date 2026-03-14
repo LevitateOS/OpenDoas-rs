@@ -15,6 +15,15 @@ Additionally a built-in shim is planned for sudo to ease migration from sudo to 
 
 ## Usage
 
+Additional operational and release guidance:
+
+- [Installation](./docs/INSTALL.md)
+- [Operations](./docs/OPERATIONS.md)
+- [Security review checklist](./docs/SECURITY-REVIEW.md)
+- [Release checklist](./docs/RELEASE-CHECKLIST.md)
+- [Versioning and changelog policy](./docs/VERSIONING.md)
+- [Production readiness](./PRODUCTION-READINESS.md)
+
 ### PAM authentication
 
 PAM authentication is the default authentication method and it requires you to manually setup an acceptable PAM configuration for your system if you are planning to use it directly after building it yourself.
@@ -36,6 +45,17 @@ session         include         system-auth
 ## Security
 
 If you find any security issues or have related concerns, please consider contacting me privately via [e-mail](mailto:TheDcoder@protonmail.com).
+
+## Testing
+
+`OpenDoas-rs` is validated against upstream `OpenDoas` through an oracle-driven
+conformance harness under [conformance](./conformance/README.md).
+
+Current automated checks include:
+
+- host build matrix in GitHub Actions
+- full oracle-driven conformance suite
+- deterministic parser stress testing
 
 ## Acknowledgements
 
