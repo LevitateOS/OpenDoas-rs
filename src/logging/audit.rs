@@ -13,7 +13,7 @@ pub fn log_failed_auth(user: &str) {
 
 pub fn log_permitted_command(user: &str, cmdline: &str, target: &str, cwd: &str) {
     let msg = format!(
-        "{} ran command {} as {} from {}",
+        "{} was permitted to run command {} as {} from {}",
         user, cmdline, target, cwd
     );
     syslog(libc::LOG_AUTHPRIV | libc::LOG_INFO, &msg);

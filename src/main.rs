@@ -117,6 +117,7 @@ fn execute(opts: Execute) {
     } else {
         None
     };
+    #[allow(unused_variables)]
     let reuse_persist = timestamp
         .as_ref()
         .map(|handle| handle.is_valid())
@@ -126,8 +127,7 @@ fn execute(opts: Execute) {
     #[cfg(auth = "none")]
     {
         if let Err(msg) = ensure_nopass(&rule_opts) {
-            eprintln!("{msg}");
-            return;
+            print_error_and_exit(msg, 1);
         }
 
         run_result = run_permitted_command(&plan);
@@ -139,26 +139,27 @@ fn execute(opts: Execute) {
 
         let mut pam_context;
         let mut pam_session = None;
+        let require_auth = !rule_opts.nopass && !reuse_persist;
 
-        if !rule_opts.nopass && !reuse_persist {
-            if !opts.interactive {
-                print_error_and_exit("Authentication required", 1);
+        if require_auth && !opts.interactive {
+            print_error_and_exit("Authentication required", 1);
+        }
+        match authenticate(&passwd, &passwd_target, require_auth) {
+            Ok(transaction) => {
+                pam_context = transaction.into_context();
+                pam_session = Some(
+                    pam_context
+                        .open_session(pam_client::Flag::NONE)
+                        .unwrap_or_else(|err| {
+                            print_error_and_exit(&format!("Failed to start PAM session: {err}"), 1)
+                        }),
+                );
             }
-            match authenticate(&passwd, &passwd_target) {
-                Ok(transaction) => {
-                    pam_context = transaction.context.unwrap();
-                    pam_session = Some(
-                        pam_context
-                            .open_session(pam_client::Flag::NONE)
-                            .expect("Failed to start PAM session"),
-                    );
+            Err(msg) => {
+                if msg == "Authentication failed" {
+                    log_failed_auth(&passwd.name);
                 }
-                Err(msg) => {
-                    if msg == "Authentication failed" {
-                        log_failed_auth(&passwd.name);
-                    }
-                    print_error_and_exit(msg, 1);
-                }
+                print_error_and_exit(msg, 1);
             }
         }
 
@@ -167,10 +168,12 @@ fn execute(opts: Execute) {
                 .refresh()
                 .unwrap_or_else(|err| print_error_and_exit(&err, 1));
         }
-        run_result = run_permitted_command(&plan);
+        run_result = run_permitted_command_with_privileged_parent(&plan);
 
         if let Some(session) = pam_session {
-            let _ = session.close(pam_client::Flag::NONE);
+            if let Err(err) = session.close(pam_client::Flag::NONE) {
+                print_error_and_exit(&format!("Failed to close PAM session: {err}"), 1);
+            }
         }
     }
 
@@ -219,8 +222,44 @@ fn run_permitted_command(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
 fn authenticate<'a>(
     source: &'a pwd_grp::Passwd,
     target: &'a pwd_grp::Passwd,
+    require_auth: bool,
 ) -> Result<Transaction<'a>, &'static str> {
     let mut transaction = Transaction::new();
-    transaction.begin(source, target)?;
+    transaction.begin(source, target, require_auth)?;
     Ok(transaction)
+}
+
+#[cfg(auth = "pam")]
+fn run_permitted_command_with_privileged_parent(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
+    use nix::{
+        sys::wait::{waitpid, WaitStatus},
+        unistd::{fork, ForkResult},
+    };
+
+    match unsafe { fork() }.map_err(|err| format!("fork: {err}"))? {
+        ForkResult::Child => {
+            let code = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_permitted_command(plan)
+            })) {
+                Ok(Ok(code)) => code,
+                Ok(Err(msg)) => {
+                    print_error(&format!("Error while trying to run: {msg}"));
+                    1
+                }
+                Err(_) => {
+                    print_error("Error while trying to run: panic during command execution");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
+        ForkResult::Parent { child } => loop {
+            match waitpid(Some(child), None) {
+                Ok(WaitStatus::Exited(_, code)) => return Ok(code),
+                Ok(WaitStatus::Signaled(_, signal, _)) => return Ok(128 + signal as i32),
+                Ok(_) => (),
+                Err(errno) => return Err(format!("waitpid: {}", errno.desc())),
+            }
+        },
+    }
 }

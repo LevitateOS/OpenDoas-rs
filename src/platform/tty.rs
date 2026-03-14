@@ -15,14 +15,10 @@ pub fn write_prompt_to_tty(prompt: &str) -> std::io::Result<()> {
 
 #[cfg(auth = "pam")]
 pub fn current_tty_name() -> Option<String> {
-    if let Ok(tty_path) = nix::unistd::ttyname(std::io::stdin()) {
-        if let Ok(tty) = tty_path.strip_prefix("/dev/") {
-            if let Some(tty) = tty.to_str() {
-                return Some(tty.to_string());
-            }
-        }
-    }
-    None
+    let tty = OpenOptions::new().read(true).open("/dev/tty").ok()?;
+    let tty_path = nix::unistd::ttyname(&tty).ok()?;
+    let tty = tty_path.strip_prefix("/dev/").ok()?;
+    tty.to_str().map(|value| value.to_string())
 }
 
 #[cfg(not(auth = "pam"))]

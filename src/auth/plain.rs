@@ -42,11 +42,34 @@ pub fn challenge_user(passwd: &pwd_grp::Passwd) -> Result<(), &'static str> {
 }
 
 pub fn verify_hash(hash: &str, response: &str) -> bool {
+    let Ok(hash) = CString::new(hash) else {
+        return false;
+    };
+    let Ok(response) = CString::new(response) else {
+        return false;
+    };
+
     unsafe {
-        let hash = CString::new(hash).unwrap_unchecked();
-        let response = CString::new(response).unwrap_unchecked();
         let result = crypt(response.as_ptr(), hash.as_ptr());
-        let result = CStr::from_ptr(result).to_str().unwrap_unchecked();
-        result == hash.to_str().unwrap_unchecked()
+        if result.is_null() {
+            return false;
+        }
+
+        CStr::from_ptr(result).to_bytes() == hash.as_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_hash;
+
+    #[test]
+    fn reject_hashes_with_nul_bytes() {
+        assert!(!verify_hash("sha512\0hash", "password"));
+    }
+
+    #[test]
+    fn reject_passwords_with_nul_bytes() {
+        assert!(!verify_hash("sha512-hash", "pass\0word"));
     }
 }

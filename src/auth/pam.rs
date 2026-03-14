@@ -54,6 +54,7 @@ impl<'a> Transaction<'a> {
         &'s mut self,
         source_passwd: &'a Passwd,
         target_passwd: &'a Passwd,
+        require_auth: bool,
     ) -> Result<(), &'static str> {
         let converser = Converser {
             username: &source_passwd.name,
@@ -70,9 +71,11 @@ impl<'a> Transaction<'a> {
                 .map_err(|_| "Authentication failed")?;
         }
 
-        context
-            .authenticate(Flag::NONE)
-            .map_err(|_| "Authentication failed")?;
+        if require_auth {
+            context
+                .authenticate(Flag::NONE)
+                .map_err(|_| "Authentication failed")?;
+        }
 
         if let Err(err) = context.acct_mgmt(Flag::NONE) {
             let code = err.code();
@@ -94,5 +97,9 @@ impl<'a> Transaction<'a> {
         self.context = Some(context);
 
         Ok(())
+    }
+
+    pub fn into_context(mut self) -> Context<Converser<'a>> {
+        self.context.take().expect("missing PAM context")
     }
 }
