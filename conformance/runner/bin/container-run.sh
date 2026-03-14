@@ -10,14 +10,17 @@ impl="$1"
 case_dir="$2"
 results_dir="$3"
 
-# shellcheck disable=SC1090
-. "$case_dir/case.env"
+if [ -f "$case_dir/case.env" ]; then
+    # shellcheck disable=SC1090
+    . "$case_dir/case.env"
+fi
 
 : "${ACTOR:=}"
 [ -n "$ACTOR" ] && : "${RUN_AS:=$ACTOR}"
 : "${RUN_AS:=alice}"
 : "${TTY:=0}"
 : "${CAPTURE_SYSLOG:=0}"
+: "${INSTALL_CONF:=1}"
 
 mkdir -p "$results_dir"
 : > "$results_dir/stdout"
@@ -27,10 +30,10 @@ mkdir -p "$results_dir"
 
 /bin/sh /conformance/fixtures/users/basic-users.sh
 
-if [ -f "$case_dir/doas.conf" ]; then
+if [ "$INSTALL_CONF" = "1" ] && [ -f "$case_dir/doas.conf" ]; then
     cp "$case_dir/doas.conf" /etc/doas.conf
     chown root:root /etc/doas.conf
-    chmod "${DOAS_CONF_MODE:-0400}" /etc/doas.conf
+    chmod "${DOAS_CONF_MODE:-0444}" /etc/doas.conf
 fi
 
 if [ -f "$case_dir/pam.doas" ]; then

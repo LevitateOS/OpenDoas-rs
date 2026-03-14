@@ -100,7 +100,7 @@ def run_stress(count: int, rebuild: bool, seed: int) -> int:
             oracle = runner.execute_case("opendoas", case_dir, case, rebuild=False)
             runner.write_baseline(case_id, oracle)
             subject = runner.execute_case("opendoas-rs", case_dir, case, rebuild=False)
-            failures.extend(runner.compare_results(case_id, oracle, subject))
+            failures.extend(runner.compare_results(case_id, case, oracle, subject))
             if not failures:
                 print(f"PASS {case_id}", flush=True)
         if failures:

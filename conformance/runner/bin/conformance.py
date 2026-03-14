@@ -26,6 +26,8 @@ ARTIFACTS_ROOT = CONF_ROOT / "artifacts"
 
 IMPLEMENTATIONS = ("opendoas", "opendoas-rs")
 CASE_TIMEOUT_SECS = 20
+STREAM_LABELS = ("stdout", "stderr", "tty", "syslog")
+CASE_MODES = {"ignore", "exact", "contains", "empty"}
 
 
 def sh(cmd: list[str], *, input_data: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -89,6 +91,76 @@ def image_exists(implementation: str, variant: str) -> bool:
     return subprocess.run(["podman", "image", "exists", image_name(implementation, variant)]).returncode == 0
 
 
+def parse_case_env(case_dir: Path) -> dict[str, str]:
+    env_path = case_dir / "case.env"
+    if not env_path.exists():
+        return {}
+
+    data: dict[str, str] = {}
+    for line_no, raw_line in enumerate(env_path.read_text().splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise SystemExit(f"{env_path}:{line_no}: expected KEY=VALUE")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if value[:1] == value[-1:] and value[:1] in {'"', "'"}:
+            value = value[1:-1]
+        data[key] = value
+    return data
+
+
+def parse_bool(value: bool | str | int, *, field: str, case_dir: Path) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"{case_dir}: invalid boolean for {field}: {value!r}")
+
+
+def expected_file_for(case_dir: Path, label: str) -> Path | None:
+    def usable(path: Path) -> Path | None:
+        if not path.exists():
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if text and not text.strip("\n"):
+            return None
+        return path
+
+    candidate = case_dir / f"expect.{label}"
+    candidate = usable(candidate)
+    if candidate is not None:
+        return candidate
+    if label == "syslog":
+        candidate = case_dir / "log"
+    else:
+        candidate = case_dir / label
+    return usable(candidate)
+
+
+def default_mode_for(label: str, expected_path: Path | None, *, legacy_case: bool) -> str:
+    if expected_path is not None:
+        return "exact"
+    if legacy_case and label in {"stdout", "stderr"}:
+        return "empty"
+    return "ignore"
+
+
+def parse_compare_mode(mode: str, *, field: str, case_dir: Path) -> str:
+    normalized = mode.strip().lower()
+    if normalized not in CASE_MODES:
+        raise SystemExit(f"{case_dir}: invalid compare mode for {field}: {mode!r}")
+    return normalized
+
+
 def resolve_variant(implementation: str, variant: str, rebuild: bool) -> tuple[str, bool]:
     if image_exists(implementation, variant) and not rebuild:
         return variant, False
@@ -106,16 +178,76 @@ def resolve_variant(implementation: str, variant: str, rebuild: bool) -> tuple[s
 
 
 def load_case(case_dir: Path) -> dict:
-    data = tomllib.loads((case_dir / "case.toml").read_text())
-    case = data.get("case", {})
+    case_toml = case_dir / "case.toml"
+    legacy_case = not case_toml.exists() and (case_dir / "case.env").exists()
+    case_env = parse_case_env(case_dir)
+    case: dict = {}
+    if case_toml.exists():
+        data = tomllib.loads(case_toml.read_text())
+        case.update(data.get("case", {}))
+
     case.setdefault("name", case_dir.name)
     case.setdefault("compare", "baseline")
-    case.setdefault("run_as", "alice")
-    case.setdefault("tty", False)
-    case.setdefault("install_conf", True)
-    case.setdefault("capture_syslog", False)
+    case["run_as"] = case.get("run_as") or case_env.get("RUN_AS") or case_env.get("ACTOR") or "alice"
+    case["tty"] = parse_bool(case.get("tty", case_env.get("TTY", False)), field="tty", case_dir=case_dir)
+    case["install_conf"] = parse_bool(
+        case.get("install_conf", True),
+        field="install_conf",
+        case_dir=case_dir,
+    )
+
+    if "oracle_variant" not in case and "VARIANT" in case_env:
+        case["oracle_variant"] = case_env["VARIANT"]
+    if "subject_variant" not in case and "VARIANT" in case_env:
+        case["subject_variant"] = case_env["VARIANT"]
+    if "oracle_variant" not in case or "subject_variant" not in case:
+        auth = case_env.get("AUTH", "plain")
+        timestamp = case_env.get("TIMESTAMP", "off")
+        if "oracle_variant" not in case:
+            case["oracle_variant"] = f"{auth}-{timestamp}"
+        if "subject_variant" not in case:
+            case["subject_variant"] = f"{auth}-{timestamp}"
     case.setdefault("oracle_variant", "shadow-off")
     case.setdefault("subject_variant", "plain-off")
+
+    compare_modes: dict[str, str] = {}
+    expected_files: dict[str, Path | None] = {}
+    for label in STREAM_LABELS:
+        expected_path = expected_file_for(case_dir, label)
+        expected_files[label] = expected_path
+        legacy_field = f"COMPARE_{label.upper()}"
+        if label == "syslog":
+            mode_field = "EXPECT_LOG_MODE"
+        else:
+            mode_field = f"EXPECT_{label.upper()}_MODE"
+        raw_mode = case_env.get(mode_field) or case_env.get(legacy_field) or default_mode_for(
+            label,
+            expected_path,
+            legacy_case=legacy_case,
+        )
+        compare_modes[label] = parse_compare_mode(raw_mode, field=mode_field, case_dir=case_dir)
+
+    capture_syslog = case.get("capture_syslog")
+    if capture_syslog is None:
+        capture_syslog = case_env.get("CAPTURE_SYSLOG")
+    if capture_syslog is None:
+        case["capture_syslog"] = compare_modes["syslog"] != "ignore"
+    else:
+        case["capture_syslog"] = parse_bool(capture_syslog, field="capture_syslog", case_dir=case_dir)
+
+    expected_exit = None
+    expect_exit_path = case_dir / "expect.exit"
+    if expect_exit_path.exists():
+        expected_exit = int(expect_exit_path.read_text().strip())
+    elif "EXPECT_EXIT" in case_env:
+        expected_exit = int(case_env["EXPECT_EXIT"])
+
+    case["pam_profile"] = case_env.get("PAM_PROFILE")
+    case["legacy_case"] = legacy_case
+    case["case_env"] = case_env
+    case["compare_modes"] = compare_modes
+    case["expected_files"] = expected_files
+    case["expected_exit"] = expected_exit
     if "invoke.sh" not in {p.name for p in case_dir.iterdir()}:
         raise SystemExit(f"{case_dir}: missing invoke.sh")
     return case
@@ -166,6 +298,14 @@ def install_case(rootfs: Path, case_dir: Path, case: dict) -> None:
         conf_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(case_dir / "doas.conf", conf_target)
         conf_target.chmod(0o400)
+    pam_target = rootfs / "etc" / "pam.d" / "doas"
+    if (case_dir / "pam.doas").exists():
+        pam_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(case_dir / "pam.doas", pam_target)
+    elif case.get("pam_profile"):
+        pam_source = CONF_ROOT / "fixtures" / "pam" / f"doas-{case['pam_profile']}"
+        pam_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pam_source, pam_target)
 
 
 def read_rootfs_file(rootfs: Path, path: str) -> str:
@@ -286,6 +426,101 @@ def run_tty(rootfs: Path, user: str, capture_syslog: bool, stdin_data: bytes | N
     return proc.returncode, "", "", transcript.decode("utf-8", "replace")
 
 
+def variant_rebuild_script(implementation: str, requested_variant: str) -> str:
+    auth_backend, timestamp = parse_variant(requested_variant)
+    if implementation == "opendoas" and auth_backend == "plain":
+        auth_backend = "shadow"
+    if implementation == "opendoas-rs" and auth_backend == "shadow":
+        auth_backend = "plain"
+
+    if implementation == "opendoas":
+        return f"""
+set -eu
+cd /src/OpenDoas
+make clean >/dev/null 2>&1 || true
+auth_flags=--without-pam
+if [ "{auth_backend}" = "pam" ]; then auth_flags=--without-shadow; fi
+ts_flag=
+if [ "{timestamp}" = "on" ]; then ts_flag=--with-timestamp; fi
+./configure --prefix=/usr $auth_flags $ts_flag
+make
+make install
+chmod 4755 /usr/bin/doas
+"""
+
+    return f"""
+set -eu
+cd /src/OpenDoas-rs
+features=auth-plain
+case "{auth_backend}" in
+    none) features=auth-none ;;
+    plain) features=auth-plain ;;
+    pam) features=auth-pam ;;
+    *) echo unsupported auth backend >&2; exit 1 ;;
+esac
+AUTH_MODE="{auth_backend}" OPENDOAS_RS_TIMESTAMP="{timestamp}" cargo build --release --no-default-features --features "$features"
+install -Dm4755 target/release/OpenDoas-rs /usr/bin/doas
+"""
+
+
+def run_case_in_container(
+    image: str,
+    implementation: str,
+    case_dir: Path,
+    result_dir: Path,
+    case: dict,
+    *,
+    requested_variant: str,
+    mutate_variant: bool,
+) -> None:
+    env_items = dict(case["case_env"])
+    env_items["RUN_AS"] = case["run_as"]
+    env_items["TTY"] = "1" if case["tty"] else "0"
+    env_items["CAPTURE_SYSLOG"] = "1" if case["capture_syslog"] else "0"
+    env_items["INSTALL_CONF"] = "1" if case["install_conf"] else "0"
+    if case.get("pam_profile"):
+        env_items["PAM_PROFILE"] = case["pam_profile"]
+
+    mounts = [
+        "--volume",
+        f"{case_dir}:/case:Z",
+        "--volume",
+        f"{result_dir}:/results:Z",
+        "--volume",
+        f"{CONF_ROOT / 'fixtures'}:/conformance/fixtures:ro,Z",
+        "--volume",
+        f"{CONF_ROOT / 'runner' / 'bin'}:/conformance/runner/bin:ro,Z",
+    ]
+    env_args: list[str] = []
+    for key, value in sorted(env_items.items()):
+        env_args.extend(["--env", f"{key}={value}"])
+    script = []
+    if mutate_variant:
+        script.append(variant_rebuild_script(implementation, requested_variant))
+    script.append(f'exec /bin/sh /conformance/runner/bin/container-run.sh "{implementation}" /case /results')
+
+    proc = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            *env_args,
+            *mounts,
+            image,
+            "/bin/sh",
+            "-ceu",
+            "\n".join(script),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=CASE_TIMEOUT_SECS * 8,
+    )
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace")
+        stdout = proc.stdout.decode("utf-8", "replace")
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, output=stdout, stderr=stderr)
+
+
 def rebuild_variant_in_rootfs(rootfs: Path, implementation: str, requested_variant: str) -> None:
     auth_backend, timestamp = parse_variant(requested_variant)
     if implementation == "opendoas-rs" and auth_backend == "shadow":
@@ -347,11 +582,20 @@ def normalize_text(label: str, text: str) -> str:
     if label == "syslog":
         lines = []
         for line in text.splitlines():
-            line = re.sub(r"^[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+", "", line)
+            line = re.sub(r"^(?:<\d+>)?[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+", "", line)
             lines.append(line)
         text = "\n".join(lines)
         if lines:
             text += "\n"
+    return text
+
+
+def normalize_expected_text(label: str, text: str) -> str:
+    text = normalize_text(label, text)
+    if text and not text.strip("\n"):
+        return ""
+    if text.endswith("\n"):
+        return text.rstrip("\n") + "\n"
     return text
 
 
@@ -369,22 +613,110 @@ def write_baseline(case_id: str, result: dict) -> None:
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True))
 
 
-def compare_results(case_id: str, oracle: dict, subject: dict) -> list[str]:
+def compare_texts(left: str, right: str, *, fromfile: str, tofile: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            left.splitlines(keepends=True),
+            right.splitlines(keepends=True),
+            fromfile=fromfile,
+            tofile=tofile,
+        )
+    )
+
+
+def validate_stream(case_id: str, implementation: str, label: str, mode: str, expected: str | None, actual: str) -> list[str]:
+    prefix = f"{case_id}: {implementation} {label}"
+    if mode == "ignore":
+        return []
+    if expected is None and mode in {"exact", "contains"}:
+        return []
+    if mode == "exact":
+        assert expected is not None
+        if expected == actual:
+            return []
+        diff = compare_texts(expected, actual, fromfile=f"expected/{label}", tofile=f"{implementation}/{label}")
+        return [f"{prefix} mismatch\n{diff}"]
+    if mode == "contains":
+        assert expected is not None
+        if expected in actual:
+            return []
+        return [f"{prefix} missing expected content\nexpected substring:\n{expected}\nactual:\n{actual}"]
+    if mode == "empty":
+        if not actual:
+            return []
+        return [f"{prefix} expected empty output\nactual:\n{actual}"]
+    raise AssertionError(f"unexpected compare mode: {mode}")
+
+
+def validate_result(case_id: str, implementation: str, case: dict, result: dict) -> list[str]:
     problems: list[str] = []
-    for label in ("exit_code", "stdout", "stderr", "tty", "syslog"):
-        if oracle[label] != subject[label]:
-            if label == "exit_code":
-                problems.append(f"{case_id}: exit code {subject[label]} != {oracle[label]}")
-            else:
-                diff = "".join(
-                    difflib.unified_diff(
-                        oracle[label].splitlines(keepends=True),
-                        subject[label].splitlines(keepends=True),
-                        fromfile=f"oracle/{label}",
-                        tofile=f"subject/{label}",
-                    )
+    expected_exit = case["expected_exit"]
+    if expected_exit is not None and result["exit_code"] != expected_exit:
+        problems.append(
+            f"{case_id}: {implementation} exit code {result['exit_code']} != expected {expected_exit}"
+        )
+
+    for label in STREAM_LABELS:
+        expected_path = case["expected_files"][label]
+        expected_text = None
+        if expected_path is not None:
+            expected_text = normalize_expected_text(label, expected_path.read_text(encoding="utf-8", errors="replace"))
+            if case["compare_modes"][label] == "contains":
+                expected_text = expected_text.rstrip("\n")
+        problems.extend(
+            validate_stream(
+                case_id,
+                implementation,
+                label,
+                case["compare_modes"][label],
+                expected_text,
+                result[label],
+            )
+        )
+    return problems
+
+
+def compare_results(case_id: str, case: dict, oracle: dict, subject: dict) -> list[str]:
+    problems = validate_result(case_id, "opendoas", case, oracle)
+    problems.extend(validate_result(case_id, "opendoas-rs", case, subject))
+
+    if case["expected_exit"] is None and oracle["exit_code"] != subject["exit_code"]:
+        problems.append(f"{case_id}: exit code {subject['exit_code']} != {oracle['exit_code']}")
+
+    for label in STREAM_LABELS:
+        mode = case["compare_modes"][label]
+        expected_path = case["expected_files"][label]
+        if mode == "ignore":
+            if expected_path is None and case["compare"] == "baseline" and oracle[label] != subject[label]:
+                diff = compare_texts(
+                    oracle[label],
+                    subject[label],
+                    fromfile=f"oracle/{label}",
+                    tofile=f"subject/{label}",
                 )
                 problems.append(f"{case_id}: mismatch in {label}\n{diff}")
+            continue
+        if mode == "empty":
+            continue
+        if expected_path is not None:
+            if mode == "exact":
+                continue
+            if mode == "contains":
+                continue
+        if mode == "contains":
+            if oracle[label] not in subject[label]:
+                problems.append(
+                    f"{case_id}: mismatch in {label}\nexpected substring from oracle:\n{oracle[label]}\nsubject:\n{subject[label]}"
+                )
+            continue
+        if oracle[label] != subject[label]:
+            diff = compare_texts(
+                oracle[label],
+                subject[label],
+                fromfile=f"oracle/{label}",
+                tofile=f"subject/{label}",
+            )
+            problems.append(f"{case_id}: mismatch in {label}\n{diff}")
     return problems
 
 
@@ -392,19 +724,22 @@ def execute_case(implementation: str, case_dir: Path, case: dict, rebuild: bool)
     requested_variant = case["oracle_variant"] if implementation == "opendoas" else case["subject_variant"]
     image_variant, mutate_variant = resolve_variant(implementation, requested_variant, rebuild)
     image = image_name(implementation, image_variant)
-    rootfs = materialize_rootfs(image)
+    result_dir = Path(tempfile.mkdtemp(prefix="conformance-results-"))
     try:
-        install_case(rootfs, case_dir, case)
-        if mutate_variant:
-            rebuild_variant_in_rootfs(rootfs, implementation, requested_variant)
-        stdin_data = None
-        if (case_dir / "stdin.txt").exists():
-            stdin_data = (case_dir / "stdin.txt").read_bytes()
-        if case["tty"]:
-            exit_code, stdout, stderr, tty = run_tty(rootfs, case["run_as"], case["capture_syslog"], stdin_data)
-        else:
-            exit_code, stdout, stderr, tty = run_non_tty(rootfs, case["run_as"], case["capture_syslog"], stdin_data)
-        syslog = read_rootfs_file(rootfs, "/tmp/conformance-syslog.log") if case["capture_syslog"] else ""
+        run_case_in_container(
+            image,
+            implementation,
+            case_dir,
+            result_dir,
+            case,
+            requested_variant=requested_variant,
+            mutate_variant=mutate_variant,
+        )
+        exit_code = int((result_dir / "exit_code").read_text().strip())
+        stdout = (result_dir / "stdout").read_text(encoding="utf-8", errors="replace")
+        stderr = (result_dir / "stderr").read_text(encoding="utf-8", errors="replace")
+        tty = (result_dir / "tty").read_text(encoding="utf-8", errors="replace")
+        syslog = (result_dir / "syslog").read_text(encoding="utf-8", errors="replace")
         result = {
             "implementation": implementation,
             "variant": requested_variant,
@@ -424,7 +759,7 @@ def execute_case(implementation: str, case_dir: Path, case: dict, rebuild: bool)
                     "python3",
                     "-c",
                     "from pathlib import Path; import shutil, sys; shutil.rmtree(Path(sys.argv[1]), ignore_errors=True)",
-                    str(rootfs),
+                    str(result_dir),
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -436,15 +771,19 @@ def execute_case(implementation: str, case_dir: Path, case: dict, rebuild: bool)
 
 
 def collect_cases(paths: list[str]) -> list[Path]:
+    def is_case_dir(path: Path) -> bool:
+        return path.is_dir() and ((path / "case.toml").exists() or (path / "case.env").exists())
+
     if not paths:
-        return sorted(path.parent for path in CASES_ROOT.rglob("case.toml"))
+        result = [path for path in CASES_ROOT.rglob("*") if is_case_dir(path)]
+        return sorted(dict.fromkeys(result))
     result: list[Path] = []
     for value in paths:
         path = (ROOT / value).resolve()
-        if path.is_dir() and (path / "case.toml").exists():
+        if is_case_dir(path):
             result.append(path)
         elif path.is_dir():
-            result.extend(sorted(p.parent for p in path.rglob("case.toml")))
+            result.extend(sorted(candidate for candidate in path.rglob("*") if is_case_dir(candidate)))
         else:
             raise SystemExit(f"{value}: no such case path")
     return sorted(dict.fromkeys(result))
@@ -463,7 +802,7 @@ def cmd_run_case(args: argparse.Namespace) -> int:
     oracle = execute_case("opendoas", case_dir, case, rebuild=args.rebuild)
     write_baseline(rel_case_id(case_dir), oracle)
     subject = execute_case("opendoas-rs", case_dir, case, rebuild=args.rebuild)
-    problems = compare_results(rel_case_id(case_dir), oracle, subject)
+    problems = compare_results(rel_case_id(case_dir), case, oracle, subject)
     if problems:
         print("\n\n".join(problems), file=sys.stderr)
         return 1
@@ -479,8 +818,9 @@ def cmd_run_suite(args: argparse.Namespace) -> int:
         oracle = execute_case("opendoas", case_dir, case, rebuild=args.rebuild)
         write_baseline(rel_case_id(case_dir), oracle)
         subject = execute_case("opendoas-rs", case_dir, case, rebuild=args.rebuild)
-        failures.extend(compare_results(rel_case_id(case_dir), oracle, subject))
-        if not failures:
+        case_failures = compare_results(rel_case_id(case_dir), case, oracle, subject)
+        failures.extend(case_failures)
+        if not case_failures:
             print(f"PASS {rel_case_id(case_dir)}")
     if failures:
         print("\n\n".join(failures), file=sys.stderr)
