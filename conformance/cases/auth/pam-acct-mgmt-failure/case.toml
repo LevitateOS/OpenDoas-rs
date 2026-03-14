@@ -1,0 +1,5 @@
+[case]
+oracle_variant = "pam-off"
+subject_variant = "pam-off"
+run_as = "alice"
+capture_syslog = true
