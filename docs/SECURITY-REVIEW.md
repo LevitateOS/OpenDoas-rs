@@ -5,6 +5,21 @@ This checklist is for manual review of the privilege boundary.
 Current status:
 
 - no formal sign-off recorded yet
+- first-pass phase investigations now exist under
+  [docs/investigations](/home/vince/Projects/rsudoas/docs/investigations/README.md)
+- multiple open findings remain, including high-severity product issues in
+  authentication, logging, and parser behavior
+
+## Recorded Investigation Passes
+
+- [Phase 0: Claim Boundary And Evidence Lock](/home/vince/Projects/rsudoas/docs/investigations/00-phase-0-claim-boundary.md)
+- [Phase 1: Privilege Boundary And Execution Audit](/home/vince/Projects/rsudoas/docs/investigations/01-phase-1-privilege-boundary.md)
+- [Phase 2: Config And Policy Audit](/home/vince/Projects/rsudoas/docs/investigations/02-phase-2-config-policy.md)
+- [Phase 3: Auth, TTY, And Session Audit](/home/vince/Projects/rsudoas/docs/investigations/03-phase-3-auth-tty-session.md)
+- [Phase 4: Persist And Logging Audit](/home/vince/Projects/rsudoas/docs/investigations/04-phase-4-persist-logging.md)
+- [Phase 5: Harness And Negative-Testing Hardening](/home/vince/Projects/rsudoas/docs/investigations/05-phase-5-harness-negative-testing.md)
+- [Phase 6: Environment Validation](/home/vince/Projects/rsudoas/docs/investigations/06-phase-6-environment-validation.md)
+- [Phase 7: Release Gate, Soak, And Operational Validation](/home/vince/Projects/rsudoas/docs/investigations/07-phase-7-release-soak.md)
 
 ## Command Execution
 
@@ -60,3 +75,7 @@ For each completed review pass, record:
 - scope
 - findings
 - unresolved risks
+
+The phase reports above are the current record. This checklist should not be
+considered signed off until the open findings in those reports are either fixed
+or explicitly accepted with rationale.

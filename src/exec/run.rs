@@ -40,12 +40,14 @@ pub fn current_dir_label() -> String {
 pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
     reset_process_path();
 
-    let cmd_cstr = std::ffi::CString::new(plan.command)
-        .map_err(|_| String::from("Invalid command"))?;
+    let cmd_cstr =
+        std::ffi::CString::new(plan.command).map_err(|_| String::from("Invalid command"))?;
     let arg_cstrs: Vec<_> = plan
         .args
         .iter()
-        .map(|arg| std::ffi::CString::new(arg.as_bytes()).map_err(|_| String::from("Invalid argument")))
+        .map(|arg| {
+            std::ffi::CString::new(arg.as_bytes()).map_err(|_| String::from("Invalid argument"))
+        })
         .collect::<Result<_, _>>()?;
     let env_cstrs = build_exec_env(
         plan.source,

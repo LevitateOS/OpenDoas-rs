@@ -20,6 +20,8 @@ Additional operational and release guidance:
 - [Installation](./docs/INSTALL.md)
 - [Operations](./docs/OPERATIONS.md)
 - [Security review checklist](./docs/SECURITY-REVIEW.md)
+- [Gap register](./docs/GAP-REGISTER.md)
+- [Investigation phases](./docs/INVESTIGATION-PHASES.md)
 - [Release checklist](./docs/RELEASE-CHECKLIST.md)
 - [Versioning and changelog policy](./docs/VERSIONING.md)
 - [Production readiness](./PRODUCTION-READINESS.md)
@@ -54,8 +56,15 @@ conformance harness under [conformance](./conformance/README.md).
 Current automated checks include:
 
 - host build matrix in GitHub Actions
-- full oracle-driven conformance suite
+- oracle-driven conformance sweep over the current TOML-backed harness corpus
 - deterministic parser stress testing
+
+Current limitation:
+
+- the first-pass investigation reports in
+  [docs/investigations](./docs/investigations/README.md) found open product and
+  harness blockers, so the project should not yet be treated as
+  production-ready
 
 ## Acknowledgements
 

@@ -26,7 +26,11 @@ pub fn spawn_and_wait(
 ) -> Result<SpawnOutcome, String> {
     let child_pid = match spawn_process(
         cmd_cstr,
-        [cmd_cstr].into_iter().chain(args.iter()).cloned().collect::<Vec<_>>(),
+        [cmd_cstr]
+            .into_iter()
+            .chain(args.iter())
+            .cloned()
+            .collect::<Vec<_>>(),
         env_cstrs,
     ) {
         Ok(child_pid) => child_pid,
@@ -71,7 +75,10 @@ fn spawn_process(
         cmd_cstr.as_c_str(),
         &file_actions,
         &spawn::PosixSpawnAttr::init().map_err(|_| Errno::EINVAL)?,
-        &argv.iter().map(|value| value.as_c_str()).collect::<Vec<_>>(),
+        &argv
+            .iter()
+            .map(|value| value.as_c_str())
+            .collect::<Vec<_>>(),
         &env_cstrs
             .iter()
             .map(|value| value.as_c_str())
@@ -84,10 +91,9 @@ fn spawn_shell_fallback(
     args: &[CString],
     env_cstrs: &[CString],
 ) -> Result<nix::unistd::Pid, String> {
-    let script_path = resolve_shell_fallback_path(cmd)
-        .ok_or_else(|| format!("{cmd}: command not found"))?;
-    let shell_cstr =
-        CString::new("/bin/sh").map_err(|_| String::from("invalid shell path"))?;
+    let script_path =
+        resolve_shell_fallback_path(cmd).ok_or_else(|| format!("{cmd}: command not found"))?;
+    let shell_cstr = CString::new("/bin/sh").map_err(|_| String::from("invalid shell path"))?;
     let shell_argv0 = CString::new("sh").map_err(|_| String::from("invalid shell argv"))?;
     let script_cstr = CString::new(script_path).map_err(|_| String::from("invalid script path"))?;
     let argv = [shell_argv0, script_cstr]
@@ -95,8 +101,7 @@ fn spawn_shell_fallback(
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
 
-    spawn_process(&shell_cstr, argv, env_cstrs)
-        .map_err(|err| format!("posix_spawnp: {err}"))
+    spawn_process(&shell_cstr, argv, env_cstrs).map_err(|err| format!("posix_spawnp: {err}"))
 }
 
 fn resolve_shell_fallback_path(cmd: &str) -> Option<String> {

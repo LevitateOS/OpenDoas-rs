@@ -1,10 +1,6 @@
 use std::{fs::File, io::Read};
 
-use crate::{
-    cli::args::Execute,
-    config::validate::validate_runtime_config_metadata,
-    Rules,
-};
+use crate::{cli::args::Execute, config::validate::validate_runtime_config_metadata, Rules};
 
 #[derive(Debug)]
 pub struct ConfigRequest {

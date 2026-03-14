@@ -5,11 +5,15 @@ described as production-ready.
 
 Current status:
 
-- `OpenDoas-rs` is conformance-green against the current oracle-driven suite.
-- The current suite passes `113` end-to-end cases against upstream
+- `OpenDoas-rs` is green against the current Python-runner conformance sweep.
+- That sweep currently executes `113` TOML-backed cases against upstream
   `OpenDoas`.
-- That is strong parity evidence.
-- It is not, by itself, sufficient to declare the project production-ready.
+- First-pass investigation phases have since found real high-severity product
+  and harness issues that keep the project well short of production readiness.
+- The full gap register is tracked in
+  [GAP-REGISTER.md](/home/vince/Projects/rsudoas/docs/GAP-REGISTER.md).
+- The investigation order for closing those gaps is tracked in
+  [INVESTIGATION-PHASES.md](/home/vince/Projects/rsudoas/docs/INVESTIGATION-PHASES.md).
 
 ## Production-Ready Means
 
@@ -27,17 +31,16 @@ For this project, production-ready means all of the following are true:
 
 ## Current Assessment
 
-Current assessment: `not production-ready yet`
+Current assessment: `not production-ready`
 
 Reasons:
 
-- CI is now present, but release policy and branch protection still need to
-  enforce it
-- the current evidence is strong on one oracle path, but not yet broad across
-  multiple real deployment environments
-- no dedicated security review has been completed on the privilege boundary
-- release and operational guidance now exists, but it still needs real operator
-  validation
+- the first-pass investigations found open high-severity issues in parser,
+  auth/session, logging, and harness coverage
+- CI is present, but the current green sweep does not cover the full checked-in
+  case corpus
+- the current evidence is still narrow across real deployment environments
+- no investigation phase that matters for a production claim has signed off yet
 
 ## Required Gates
 
@@ -144,7 +147,8 @@ The next work should happen in this order:
 
 ## Current Verdict
 
-Verdict today: `release candidate trajectory`, not `production-ready`
+Verdict today: `not production-ready`, and not yet ready for a release-candidate
+claim.
 
-That is a strong position for the project, but this is still a privilege
-escalation tool. The standard must stay higher than “the current tests pass.”
+This is still a privilege-escalation tool. The current investigations have
+already shown that “the current tests pass” was not a strong enough standard.

@@ -53,11 +53,10 @@ impl Command {
                         Opt('C', Some(arg)) => exec_cmd.config_file = Some(arg.clone()),
                         Opt('u', Some(arg)) => {
                             exec_cmd.user = arg.clone();
-                            exec_cmd.target_uid = parse_target_uid(&arg)
-                                .unwrap_or_else(|err| {
-                                    eprintln!("doas: {err}");
-                                    std::process::exit(1);
-                                });
+                            exec_cmd.target_uid = parse_target_uid(&arg).unwrap_or_else(|err| {
+                                eprintln!("doas: {err}");
+                                std::process::exit(1);
+                            });
                         }
                         _ => unreachable!(),
                     },
