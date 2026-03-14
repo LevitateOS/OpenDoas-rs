@@ -1,0 +1,3 @@
+[submodule ".reference/OpenDoas"]
+	path = .reference/OpenDoas
+	url = https://github.com/Duncaen/OpenDoas.git
