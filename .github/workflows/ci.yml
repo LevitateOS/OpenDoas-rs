@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Host Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build default feature set
+        run: cargo build --locked
+
+      - name: Build explicit plain backend
+        env:
+          AUTH_MODE: plain
+        run: cargo build --locked --no-default-features --features auth-plain
+
+      - name: Build without authentication backend
+        env:
+          AUTH_MODE: none
+        run: cargo build --locked --no-default-features --features auth-none
+
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          if ! grep -q "^${USER}:" /etc/subuid; then
+            echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
+          fi
+          if ! grep -q "^${USER}:" /etc/subgid; then
+            echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
+          fi
+
+      - name: Show Podman info
+        run: podman info
+
+      - name: Run oracle-driven conformance suite
+        run: conformance/runner/bin/run-suite.sh

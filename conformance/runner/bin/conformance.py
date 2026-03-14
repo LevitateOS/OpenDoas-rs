@@ -127,18 +127,31 @@ def rel_case_id(case_dir: Path) -> str:
 
 def materialize_rootfs(image: str) -> Path:
     rootfs = Path(tempfile.mkdtemp(prefix="conformance-rootfs-"))
-    script = 'rootfs=$(podman image mount "$1"); tar -C "$rootfs" -cf - .; podman image unmount "$1" >/dev/null'
+    container_name = f"conformance-export-{uuid.uuid4().hex}"
+    subprocess.run(
+        ["podman", "create", "--name", container_name, image, "/bin/true"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
     proc = subprocess.Popen(
-        ["podman", "unshare", "/bin/sh", "-c", script, "_", image],
+        ["podman", "export", container_name],
         stdout=subprocess.PIPE,
     )
-    assert proc.stdout is not None
-    subprocess.run(["tar", "-C", str(rootfs), "-xf", "-"], stdin=proc.stdout, check=True)
-    proc.stdout.close()
-    if proc.wait() != 0:
-        shutil.rmtree(rootfs, ignore_errors=True)
-        raise subprocess.CalledProcessError(proc.returncode, proc.args)
-    return rootfs
+    try:
+        assert proc.stdout is not None
+        subprocess.run(["tar", "-C", str(rootfs), "-xf", "-"], stdin=proc.stdout, check=True)
+        proc.stdout.close()
+        if proc.wait() != 0:
+            shutil.rmtree(rootfs, ignore_errors=True)
+            raise subprocess.CalledProcessError(proc.returncode, proc.args)
+        return rootfs
+    finally:
+        subprocess.run(
+            ["podman", "rm", "-f", container_name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def install_case(rootfs: Path, case_dir: Path, case: dict) -> None:
