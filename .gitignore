@@ -1,0 +1,26 @@
+target/
+
+# Conformance outputs
+conformance/artifacts/*
+!conformance/artifacts/.gitkeep
+
+# Reference clone metadata
+.reference/OpenDoas/.git/
+.reference/OpenDoas/.git-author-conv-file
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+
+# Editor temp files
+*.swp
+*.swo
+*~
