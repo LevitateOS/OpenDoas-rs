@@ -1,0 +1,6 @@
+[case]
+oracle_variant = "shadow-off"
+subject_variant = "plain-off"
+run_as = "alice"
+install_conf = false
+

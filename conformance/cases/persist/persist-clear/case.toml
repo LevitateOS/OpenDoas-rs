@@ -1,0 +1,6 @@
+[case]
+oracle_variant = "shadow-on"
+subject_variant = "plain-on"
+run_as = "alice"
+tty = true
+

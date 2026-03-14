@@ -1,0 +1,7 @@
+DOAS_USER=alice
+HOME=/home/bob
+LOGNAME=bob
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+SHELL=/bin/sh
+USER=bob
+
