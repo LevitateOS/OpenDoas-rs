@@ -15,10 +15,7 @@ pub fn parse_target_uid(spec: &str) -> Result<u32, String> {
         return Err(String::from("unknown user"));
     };
 
-    pwd_grp::getpwuid(uid.into())
-        .map_err(|err| err.to_string())?
-        .map(|passwd| passwd.uid.into())
-        .ok_or_else(|| String::from("unknown user"))
+    Ok(uid)
 }
 
 pub fn target_passwd(uid: u32) -> Result<Passwd, String> {

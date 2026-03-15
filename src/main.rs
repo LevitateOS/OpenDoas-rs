@@ -54,9 +54,8 @@ fn execute(opts: Execute) {
         print_error_and_exit(&err, 1);
     }
 
-    let rules = load_rules(&config_request).unwrap_or_else(|err| print_error_and_exit(&err, 1));
-
     let passwd = current_passwd().unwrap_or_else(|err| print_error_and_exit(&err, 1));
+    let rules = load_rules(&config_request).unwrap_or_else(|err| print_error_and_exit(&err, 1));
     let source_env: HashMap<String, String> = env::vars().collect();
     let former_path = source_env.get("PATH").cloned().unwrap_or_default();
     let (groups, gids) =
@@ -97,7 +96,7 @@ fn execute(opts: Execute) {
         Decision::Deny => {
             let cmdline = get_cmdline(&cmd, &opts.args);
             log_denied_command(&passwd.name, &cmdline);
-            print_error_and_exit("Not permitted", 1);
+            print_error_and_exit("Operation not permitted", 1);
         }
         Decision::Permit(match_opts) => match_opts,
     };
@@ -205,8 +204,16 @@ fn execute(opts: Execute) {
                 std::process::exit(code);
             }
         }
-        Err(msg) => print_error_and_exit(&format!("Error while trying to run: {msg}"), 1),
+        Err(msg) => print_exec_error_and_exit(&msg, 1),
     }
+}
+
+fn print_exec_error_and_exit(msg: &str, code: i32) -> ! {
+    if msg.starts_with("execvp: ") {
+        eprintln!("{msg}");
+        std::process::exit(code);
+    }
+    print_error_and_exit(msg, code)
 }
 
 fn run_permitted_command(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
@@ -243,7 +250,11 @@ fn run_permitted_command_with_privileged_parent(plan: &ExecutionPlan<'_>) -> Res
             })) {
                 Ok(Ok(code)) => code,
                 Ok(Err(msg)) => {
-                    print_error(&format!("Error while trying to run: {msg}"));
+                    if msg.starts_with("execvp: ") {
+                        eprintln!("{msg}");
+                    } else {
+                        print_error(&msg);
+                    }
                     1
                 }
                 Err(_) => {

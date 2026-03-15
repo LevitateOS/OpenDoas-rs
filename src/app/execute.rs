@@ -27,11 +27,30 @@ impl ConfigRequest {
 }
 
 pub fn load_rules(request: &ConfigRequest) -> Result<Rules, String> {
+    fn format_io_error(err: &std::io::Error) -> &'static str {
+        use std::io::ErrorKind;
+
+        match err.kind() {
+            ErrorKind::NotFound => "No such file or directory",
+            ErrorKind::PermissionDenied => "Permission denied",
+            ErrorKind::IsADirectory => "Is a directory",
+            _ => "Input/output error",
+        }
+    }
+
     let mut file = File::open(&request.path).map_err(|err| {
         if request.check_permissions {
-            format!("doas is not enabled, {}: {err}", request.path)
+            format!(
+                "doas is not enabled, {}: {}",
+                request.path,
+                format_io_error(&err)
+            )
         } else {
-            format!("could not open config file {}: {err}", request.path)
+            format!(
+                "could not open config file {}: {}",
+                request.path,
+                format_io_error(&err)
+            )
         }
     })?;
 
@@ -44,7 +63,17 @@ pub fn load_rules(request: &ConfigRequest) -> Result<Rules, String> {
 
     let mut config = String::new();
     file.read_to_string(&mut config)
-        .map_err(|err| format!("could not read config file {}: {err}", request.path))?;
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::IsADirectory {
+                String::from("input error reading config at line 1")
+            } else {
+                format!(
+                    "could not read config file {}: {}",
+                    request.path,
+                    format_io_error(&err)
+                )
+            }
+        })?;
 
-    Rules::try_from(config.as_str()).map_err(|err| format!("Error parsing config: {err}"))
+    Rules::try_from(config.as_str()).map_err(|err| err.to_string())
 }

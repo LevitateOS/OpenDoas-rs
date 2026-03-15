@@ -583,6 +583,8 @@ def normalize_text(label: str, text: str) -> str:
         lines = []
         for line in text.splitlines():
             line = re.sub(r"^(?:<\d+>)?[A-Z][a-z]{2}\s+\d+\s+\d\d:\d\d:\d\d\s+\S+\s+", "", line)
+            if re.match(r"^\+\s+\S+\s+\S+:\S+$", line):
+                continue
             lines.append(line)
         text = "\n".join(lines)
         if lines:

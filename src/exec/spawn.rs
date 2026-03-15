@@ -36,10 +36,11 @@ pub fn spawn_and_wait(
         Ok(child_pid) => child_pid,
         Err(Errno::ENOEXEC) => spawn_shell_fallback(cmd, args, env_cstrs)?,
         Err(err) => {
-            return Err(if err == Errno::ENOENT {
-                format!("{cmd}: command not found")
-            } else {
-                format!("posix_spawnp: {err}")
+            return Err(match err {
+                Errno::ENOENT => format!("{cmd}: command not found"),
+                Errno::EACCES => format!("{cmd}: Permission denied"),
+                Errno::ENAMETOOLONG => format!("execvp: {cmd}: path too long"),
+                _ => format!("posix_spawnp: {}", err.desc()),
             })
         }
     };

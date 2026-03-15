@@ -160,11 +160,14 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
     let mut current = String::new();
     let mut pure = true;
     let mut quote = false;
+    let mut quote_start = None;
     let mut escape = false;
+    let mut continuation = false;
     let mut forced = false;
     let mut comment = false;
     let mut logical_line = 1;
     let mut physical_line = 1;
+    let mut physical_column = 1;
 
     let flush = |tokens: &mut Vec<Token>,
                  current: &mut String,
@@ -191,6 +194,9 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
                 comment = false;
                 physical_line += 1;
                 logical_line = physical_line;
+                physical_column = 1;
+            } else {
+                physical_column += 1;
             }
             continue;
         }
@@ -200,24 +206,35 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
                 '\0' => return Err(format!("unallowed character NUL at line {}", physical_line)),
                 '\n' => {
                     pure = false;
+                    continuation = true;
                     escape = false;
                     physical_line += 1;
+                    physical_column = 1;
                 }
-                _ => {
+                _ if quote => {
                     push_token_char(&mut current, chr, logical_line)?;
                     escape = false;
+                    physical_column += 1;
+                }
+                _ => {
+                    return Err(syntax_error(physical_line));
                 }
             }
             continue;
+        }
+
+        if continuation && chr != '\n' {
+            continuation = false;
         }
 
         match chr {
             '\0' => return Err(format!("unallowed character NUL at line {}", physical_line)),
             '\n' => {
                 if quote {
+                    let (line, column) = quote_start.unwrap_or((physical_line, physical_column));
                     return Err(format!(
-                        "syntax error: unterminated quotes at line {}",
-                        physical_line
+                        "unterminated quotes in column {} at line {}",
+                        column, line
                     ));
                 }
                 flush(
@@ -232,6 +249,7 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
                 }
                 physical_line += 1;
                 logical_line = physical_line;
+                physical_column = 1;
             }
             '#' if !quote => {
                 flush(
@@ -242,22 +260,34 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
                     logical_line,
                 );
                 comment = true;
+                physical_column += 1;
             }
             '"' => {
                 pure = false;
-                quote = !quote;
+                if quote {
+                    quote = false;
+                    quote_start = None;
+                } else {
+                    quote = true;
+                    quote_start = Some((physical_line, physical_column));
+                }
                 forced = true;
+                physical_column += 1;
             }
             '\\' => {
                 escape = true;
+                physical_column += 1;
             }
-            ' ' | '\t' if !quote => flush(
-                &mut line_tokens,
-                &mut current,
-                &mut pure,
-                &mut forced,
-                logical_line,
-            ),
+            ' ' | '\t' if !quote => {
+                flush(
+                    &mut line_tokens,
+                    &mut current,
+                    &mut pure,
+                    &mut forced,
+                    logical_line,
+                );
+                physical_column += 1;
+            }
             '{' | '}' if !quote => {
                 flush(
                     &mut line_tokens,
@@ -271,18 +301,23 @@ fn tokenize_config(config: &str) -> Result<Vec<Vec<Token>>, String> {
                     pure: true,
                     line: logical_line,
                 });
+                physical_column += 1;
             }
-            _ => push_token_char(&mut current, chr, logical_line)?,
+            _ => {
+                push_token_char(&mut current, chr, logical_line)?;
+                physical_column += 1;
+            }
         }
     }
 
-    if escape {
-        return Err(format!("unterminated escape at line {}", physical_line));
+    if escape || continuation {
+        return Err(syntax_error(physical_line));
     }
     if quote {
+        let (line, column) = quote_start.unwrap_or((physical_line, physical_column));
         return Err(format!(
-            "syntax error: unterminated quotes at line {}",
-            physical_line
+            "unterminated quotes in column {} at line {}",
+            column, line
         ));
     }
 
@@ -388,5 +423,15 @@ mod tests {
     #[test]
     fn continuation_inside_keyword_disables_keyword_parsing() {
         assert!(parse_rules("per\\\nmit nopass alice\n").is_err());
+    }
+
+    #[test]
+    fn rejects_bare_backslash_escape_inside_word() {
+        assert!(parse_rules("permit nopass pe\\rmit as root cmd /usr/bin/id\n").is_err());
+    }
+
+    #[test]
+    fn rejects_continuation_without_following_text() {
+        assert!(parse_rules("permit nopass alice as root cmd /usr/bin/id args foo\\\n").is_err());
     }
 }

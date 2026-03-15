@@ -4,7 +4,10 @@ use getopt::Opt;
 
 use crate::platform::parse_target_uid;
 
-use super::{mode::Mode, usage::print_help_and_exit};
+use super::{
+    mode::Mode,
+    usage::{print_error, print_help_and_exit},
+};
 
 #[derive(Debug)]
 pub enum Command {
@@ -61,7 +64,15 @@ impl Command {
                         _ => unreachable!(),
                     },
                     Err(error) => {
-                        eprintln!("{}", error);
+                        let message = error.to_string();
+                        if let Some(flag) = message
+                            .strip_prefix("unknown option -- '")
+                            .and_then(|rest| rest.strip_suffix('\''))
+                        {
+                            print_error(&format!("unrecognized option: {flag}"));
+                        } else {
+                            print_error(&message);
+                        }
                         print_help_and_exit(1);
                     }
                 },
