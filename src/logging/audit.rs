@@ -11,6 +11,11 @@ pub fn log_failed_auth(user: &str) {
     syslog(libc::LOG_AUTHPRIV | libc::LOG_NOTICE, &msg);
 }
 
+pub fn log_tty_required(user: &str) {
+    let msg = format!("tty required for {}", user);
+    syslog(libc::LOG_AUTHPRIV | libc::LOG_NOTICE, &msg);
+}
+
 pub fn log_permitted_command(user: &str, cmdline: &str, target: &str, cwd: &str) {
     let msg = format!(
         "{} was permitted to run command {} as {} from {}",

@@ -25,13 +25,25 @@ use open_doas_rs::{
         privilege::{drop_to_real_uid, ensure_setuid_root},
         run::{current_dir_label, execute_plan, ExecutionPlan},
         shell::selected_command,
+        spawn::SpawnOutcome,
     },
-    logging::{log_denied_command, log_failed_auth, log_permitted_command},
+    logging::{log_denied_command, log_failed_auth, log_permitted_command, log_tty_required},
     persist,
     platform::{current_group_info, current_passwd, target_passwd},
     policy::{command::get_cmdline, Decision},
 };
+use std::ffi::CStr;
+#[cfg(auth = "pam")]
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::{collections::HashMap, env};
+
+#[cfg(auth = "pam")]
+static CAUGHT_SESSION_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(auth = "pam")]
+extern "C" fn catch_session_signal(signal: libc::c_int) {
+    CAUGHT_SESSION_SIGNAL.store(signal, Ordering::Relaxed);
+}
 
 fn main() {
     match Command::new() {
@@ -136,44 +148,31 @@ fn execute(opts: Execute) {
     {
         use pam_client;
 
-        let mut pam_context;
-        let mut pam_session = None;
         let require_auth = !rule_opts.nopass && !reuse_persist;
 
         if require_auth && !opts.interactive {
             print_error_and_exit("Authentication required", 1);
         }
-        match authenticate(&passwd, &passwd_target, require_auth) {
-            Ok(transaction) => {
-                pam_context = transaction.into_context();
-                pam_session = Some(
-                    pam_context
-                        .open_session(pam_client::Flag::NONE)
-                        .unwrap_or_else(|err| {
-                            print_error_and_exit(&format!("Failed to start PAM session: {err}"), 1)
-                        }),
-                );
-            }
+        let transaction = match authenticate(&passwd, &passwd_target, require_auth) {
+            Ok(transaction) => transaction,
             Err(msg) => {
-                if msg == "Authentication failed" {
-                    log_failed_auth(&passwd.name);
-                }
+                log_auth_failure(&passwd.name, msg);
                 print_error_and_exit(msg, 1);
             }
-        }
+        };
+        run_result = {
+            let mut pam_context = transaction.into_context();
+            let pam_session = pam_context
+                .open_session(pam_client::Flag::NONE)
+                .unwrap_or_else(|err| print_error_and_exit(&format!("pam_open_session: {err}"), 1));
 
-        if let Some(handle) = timestamp.as_ref() {
-            handle
-                .refresh()
-                .unwrap_or_else(|err| print_error_and_exit(&err, 1));
-        }
-        run_result = run_permitted_command_with_privileged_parent(&plan);
-
-        if let Some(session) = pam_session {
-            if let Err(err) = session.close(pam_client::Flag::NONE) {
-                print_error_and_exit(&format!("Failed to close PAM session: {err}"), 1);
+            if let Some(handle) = timestamp.as_ref() {
+                handle
+                    .refresh()
+                    .unwrap_or_else(|err| print_error_and_exit(&err, 1));
             }
-        }
+            run_permitted_command_with_privileged_parent(&plan, pam_session)
+        };
     }
 
     #[cfg(auth = "plain")]
@@ -183,9 +182,7 @@ fn execute(opts: Execute) {
                 print_error_and_exit("Authentication required", 1);
             }
             if let Err(msg) = challenge_user(&passwd) {
-                if msg == "Authentication failed" {
-                    log_failed_auth(&passwd.name);
-                }
+                log_auth_failure(&passwd.name, msg);
                 print_error_and_exit(msg, 1);
             }
         }
@@ -199,10 +196,14 @@ fn execute(opts: Execute) {
     }
 
     match run_result {
-        Ok(code) => {
+        Ok(SpawnOutcome::Exit(code)) => {
             if code != 0 {
                 std::process::exit(code);
             }
+        }
+        Ok(SpawnOutcome::Signal(code)) => {
+            print_signal_message(code - 128, false);
+            std::process::exit(code);
         }
         Err(msg) => print_exec_error_and_exit(&msg, 1),
     }
@@ -216,13 +217,21 @@ fn print_exec_error_and_exit(msg: &str, code: i32) -> ! {
     print_error_and_exit(msg, code)
 }
 
-fn run_permitted_command(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
+fn run_permitted_command(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, String> {
     if !plan.rule_opts.nolog {
         let cwd = current_dir_label();
         log_permitted_command(&plan.source.name, &plan.cmdline(), &plan.target.name, &cwd);
     }
 
     execute_plan(plan)
+}
+
+fn log_auth_failure(user: &str, msg: &str) {
+    match msg {
+        "Authentication failed" => log_failed_auth(user),
+        "a tty is required" => log_tty_required(user),
+        _ => (),
+    }
 }
 
 #[cfg(auth = "pam")]
@@ -237,18 +246,35 @@ fn authenticate<'a>(
 }
 
 #[cfg(auth = "pam")]
-fn run_permitted_command_with_privileged_parent(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
+fn run_permitted_command_with_privileged_parent<'ctx, 'user>(
+    plan: &ExecutionPlan<'_>,
+    pam_session: pam_client::Session<'ctx, Converser<'user>>,
+) -> Result<SpawnOutcome, String> {
     use nix::{
+        errno::Errno,
+        sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
         sys::wait::{waitpid, WaitStatus},
-        unistd::{fork, ForkResult},
+        unistd::{fork, getpid, ForkResult},
     };
+    use std::time::Duration;
 
     match unsafe { fork() }.map_err(|err| format!("fork: {err}"))? {
         ForkResult::Child => {
             let code = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_permitted_command(plan)
             })) {
-                Ok(Ok(code)) => code,
+                Ok(Ok(SpawnOutcome::Exit(code))) => code,
+                Ok(Ok(SpawnOutcome::Signal(code))) => {
+                    use nix::{
+                        sys::signal::{kill, Signal},
+                        unistd::getpid,
+                    };
+
+                    if let Ok(signal) = Signal::try_from(code - 128) {
+                        let _ = kill(getpid(), signal);
+                    }
+                    code
+                }
                 Ok(Err(msg)) => {
                     if msg.starts_with("execvp: ") {
                         eprintln!("{msg}");
@@ -264,13 +290,105 @@ fn run_permitted_command_with_privileged_parent(plan: &ExecutionPlan<'_>) -> Res
             };
             std::process::exit(code);
         }
-        ForkResult::Parent { child } => loop {
-            match waitpid(Some(child), None) {
-                Ok(WaitStatus::Exited(_, code)) => return Ok(code),
-                Ok(WaitStatus::Signaled(_, signal, _)) => return Ok(128 + signal as i32),
-                Ok(_) => (),
-                Err(errno) => return Err(format!("waitpid: {}", errno.desc())),
+        ForkResult::Parent { child } => {
+            CAUGHT_SESSION_SIGNAL.store(0, Ordering::Relaxed);
+            let action = SigAction::new(
+                SigHandler::Handler(catch_session_signal),
+                SaFlags::empty(),
+                SigSet::empty(),
+            );
+            let old_term = unsafe { sigaction(Signal::SIGTERM, &action) }
+                .map_err(|err| format!("sigaction: {err}"))?;
+            let old_alrm = unsafe { sigaction(Signal::SIGALRM, &action) }
+                .map_err(|err| format!("sigaction: {err}"))?;
+            let old_tstp = unsafe { sigaction(Signal::SIGTSTP, &action) }
+                .map_err(|err| format!("sigaction: {err}"))?;
+
+            let outcome = loop {
+                match waitpid(Some(child), None) {
+                    Ok(WaitStatus::Exited(_, code)) => break Ok((code, None)),
+                    Ok(WaitStatus::Signaled(_, signal, core_dumped)) => {
+                        print_signal_message(signal as i32, core_dumped);
+                        break Ok((128 + signal as i32, None));
+                    }
+                    Ok(_) => (),
+                    Err(Errno::EINTR) => {
+                        let caught = CAUGHT_SESSION_SIGNAL.swap(0, Ordering::Relaxed);
+                        if let Ok(signal) = Signal::try_from(caught) {
+                            break Ok((128 + caught, Some(signal)));
+                        }
+                    }
+                    Err(errno) => break Err(format!("waitpid: {}", errno.desc())),
+                }
+            };
+
+            restore_session_handlers(old_term, old_alrm, old_tstp);
+
+            let (status, caught_signal) = outcome?;
+
+            if caught_signal.is_some() {
+                eprintln!("\nSession terminated, killing shell");
+                let _ = kill(child, Signal::SIGTERM);
             }
-        },
+
+            close_pam_session(pam_session)?;
+
+            if let Some(caught_signal) = caught_signal {
+                std::thread::sleep(Duration::from_secs(2));
+                let _ = kill(child, Signal::SIGKILL);
+                eprintln!(" ...killed.");
+
+                let resend = if caught_signal == Signal::SIGTERM {
+                    Signal::SIGTERM
+                } else {
+                    Signal::SIGKILL
+                };
+                let _ = kill(getpid(), resend);
+            }
+
+            Ok(SpawnOutcome::Exit(status))
+        }
+    }
+}
+
+#[cfg(auth = "pam")]
+fn close_pam_session<'ctx, 'user>(
+    pam_session: pam_client::Session<'ctx, Converser<'user>>,
+) -> Result<(), String> {
+    match pam_session.close(pam_client::Flag::NONE) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(format!("pam_close_session: {err}")),
+    }
+}
+
+#[cfg(auth = "pam")]
+fn restore_session_handlers(
+    old_term: nix::sys::signal::SigAction,
+    old_alrm: nix::sys::signal::SigAction,
+    old_tstp: nix::sys::signal::SigAction,
+) {
+    use nix::sys::signal::{sigaction, Signal};
+
+    unsafe {
+        let _ = sigaction(Signal::SIGTERM, &old_term);
+        let _ = sigaction(Signal::SIGALRM, &old_alrm);
+        let _ = sigaction(Signal::SIGTSTP, &old_tstp);
+    }
+}
+
+fn print_signal_message(signal: i32, core_dumped: bool) {
+    let desc = unsafe {
+        let raw = libc::strsignal(signal);
+        if raw.is_null() {
+            format!("Signal {}", signal)
+        } else {
+            CStr::from_ptr(raw).to_string_lossy().into_owned()
+        }
+    };
+
+    if core_dumped {
+        eprintln!("{desc} (core dumped)");
+    } else {
+        eprintln!("{desc}");
     }
 }

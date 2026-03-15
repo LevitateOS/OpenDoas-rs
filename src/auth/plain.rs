@@ -5,7 +5,7 @@ use pwd_grp;
 use rpassword::read_password;
 use shadow::Shadow;
 
-use crate::platform::tty::{stdin_is_tty, write_prompt_to_tty};
+use crate::platform::tty::write_prompt_to_tty;
 
 #[link(name = "crypt")]
 extern "C" {
@@ -13,9 +13,7 @@ extern "C" {
 }
 
 pub fn challenge_user(passwd: &pwd_grp::Passwd) -> Result<(), &'static str> {
-    if !stdin_is_tty() {
-        return Err("a tty is required");
-    }
+    let hash = load_password_hash(passwd)?;
 
     let hostname = nix::unistd::gethostname().expect("Failed to get hostname");
     let hostname = hostname.into_string().expect("Hostname is not valid UTF-8");
@@ -25,20 +23,24 @@ pub fn challenge_user(passwd: &pwd_grp::Passwd) -> Result<(), &'static str> {
         Ok(value) => value,
         Err(_) => return Err("Authentication failed"),
     };
-    let mut hash = &passwd.passwd;
-    let shadow;
-    if hash == "x" {
-        shadow = match Shadow::from_name(&passwd.name) {
-            Some(value) => value,
-            None => return Err("Authentication failed"),
-        };
-        hash = &shadow.password;
-    }
-    if verify_hash(hash, &response) {
+    if verify_hash(&hash, &response) {
         Ok(())
     } else {
         Err("Authentication failed")
     }
+}
+
+fn load_password_hash(passwd: &pwd_grp::Passwd) -> Result<String, &'static str> {
+    if passwd.passwd == "x" {
+        let shadow = Shadow::from_name(&passwd.name).ok_or("Authentication failed")?;
+        return Ok(shadow.password);
+    }
+
+    if !passwd.passwd.starts_with('*') {
+        return Err("Authentication failed");
+    }
+
+    Ok(passwd.passwd.clone())
 }
 
 pub fn verify_hash(hash: &str, response: &str) -> bool {
@@ -61,7 +63,39 @@ pub fn verify_hash(hash: &str, response: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::verify_hash;
+    use super::{load_password_hash, verify_hash};
+
+    #[test]
+    fn rejects_non_shadowed_password_entries() {
+        let passwd = pwd_grp::Passwd {
+            name: String::from("alice"),
+            passwd: String::from("!"),
+            uid: 1000,
+            gid: 1000,
+            gecos: String::new(),
+            dir: String::from("/home/alice"),
+            shell: String::from("/bin/sh"),
+            __non_exhaustive: Default::default(),
+        };
+
+        assert_eq!(load_password_hash(&passwd), Err("Authentication failed"));
+    }
+
+    #[test]
+    fn accepts_star_prefixed_password_entries() {
+        let passwd = pwd_grp::Passwd {
+            name: String::from("alice"),
+            passwd: String::from("*"),
+            uid: 1000,
+            gid: 1000,
+            gecos: String::new(),
+            dir: String::from("/home/alice"),
+            shell: String::from("/bin/sh"),
+            __non_exhaustive: Default::default(),
+        };
+
+        assert_eq!(load_password_hash(&passwd), Ok(String::from("*")));
+    }
 
     #[test]
     fn reject_hashes_with_nul_bytes() {

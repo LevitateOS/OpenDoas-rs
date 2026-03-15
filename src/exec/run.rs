@@ -37,7 +37,7 @@ pub fn current_dir_label() -> String {
     }
 }
 
-pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
+pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, String> {
     reset_process_path();
 
     let cmd_cstr =
@@ -60,8 +60,5 @@ pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<i32, String> {
     switch_to_target(plan.target)?;
     reset_process_path();
 
-    match spawn_and_wait(plan.command, &cmd_cstr, &arg_cstrs, &env_cstrs)? {
-        SpawnOutcome::Exit(code) => Ok(code),
-        SpawnOutcome::Signal(code) => Ok(code),
-    }
+    spawn_and_wait(plan.command, &cmd_cstr, &arg_cstrs, &env_cstrs)
 }

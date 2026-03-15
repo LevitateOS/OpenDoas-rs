@@ -1,11 +1,4 @@
-use std::{
-    fs::OpenOptions,
-    io::{IsTerminal, Write},
-};
-
-pub fn stdin_is_tty() -> bool {
-    std::io::stdin().is_terminal()
-}
+use std::{fs::OpenOptions, io::Write};
 
 pub fn write_prompt_to_tty(prompt: &str) -> std::io::Result<()> {
     let mut tty = OpenOptions::new().write(true).open("/dev/tty")?;
