@@ -5,6 +5,21 @@ use super::{
 };
 
 impl Rules {
+    pub fn matched_rule<'a, G: AsRef<str>, A: AsRef<str>>(
+        &'a self,
+        user: &str,
+        uid: u32,
+        groups: &'a [G],
+        gids: &[u32],
+        cmd: &str,
+        args: &'a [A],
+        target_uid: u32,
+    ) -> Option<&'a Rule> {
+        self.iter()
+            .filter(|rule| rule_matches(rule, user, uid, groups, gids, cmd, args, target_uid))
+            .last()
+    }
+
     pub fn decide<G: AsRef<str>, A: AsRef<str>>(
         &self,
         user: &str,
@@ -15,12 +30,7 @@ impl Rules {
         args: &[A],
         target_uid: u32,
     ) -> Decision {
-        let matched = self
-            .iter()
-            .filter(|rule| rule_matches(rule, user, uid, groups, gids, cmd, args, target_uid))
-            .last();
-
-        Decision::from_rule(matched)
+        Decision::from_rule(self.matched_rule(user, uid, groups, gids, cmd, args, target_uid))
     }
 
     pub fn r#match<'a, G: AsRef<str>, A: AsRef<str>>(
@@ -33,8 +43,11 @@ impl Rules {
         args: &'a [A],
         target_uid: u32,
     ) -> Option<RuleOpts> {
-        self.decide(user, uid, groups, gids, cmd, args, target_uid)
-            .permit_opts()
+        self.matched_rule(user, uid, groups, gids, cmd, args, target_uid)
+            .and_then(|rule| match rule.action {
+                super::rule::RuleAction::Permit => Some(rule.options.clone()),
+                super::rule::RuleAction::Deny => None,
+            })
     }
 }
 

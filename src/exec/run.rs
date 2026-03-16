@@ -5,7 +5,7 @@ use pwd_grp::Passwd;
 use crate::{
     exec::{
         env::{build_exec_env, SourceEnv},
-        path::reset_process_path,
+        path::set_process_path,
         privilege::switch_to_target,
         spawn::{spawn_and_wait, SpawnOutcome},
     },
@@ -22,6 +22,7 @@ pub struct ExecutionPlan<'a> {
     pub rule_opts: &'a RuleOpts,
     pub source_env: &'a SourceEnv,
     pub former_path: &'a OsStr,
+    pub restricted_cmd: bool,
 }
 
 impl ExecutionPlan<'_> {
@@ -38,8 +39,6 @@ pub fn current_dir_label() -> String {
 }
 
 pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, String> {
-    reset_process_path();
-
     let cmd_cstr =
         std::ffi::CString::new(plan.command).map_err(|_| String::from("Invalid command"))?;
     let arg_cstrs: Vec<_> = plan
@@ -56,9 +55,14 @@ pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, String> {
         plan.source_env,
         plan.former_path,
     )?;
+    let search_path = if plan.restricted_cmd {
+        OsStr::new(super::path::SAFE_PATH)
+    } else {
+        plan.former_path
+    };
 
     switch_to_target(plan.target)?;
-    reset_process_path();
+    set_process_path(search_path);
 
-    spawn_and_wait(plan.command, &cmd_cstr, &arg_cstrs, &env_cstrs)
+    spawn_and_wait(plan.command, search_path, &cmd_cstr, &arg_cstrs, &env_cstrs)
 }

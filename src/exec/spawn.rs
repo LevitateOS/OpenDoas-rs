@@ -1,9 +1,9 @@
 use std::{
-    env,
-    ffi::CString,
+    ffi::{CString, OsStr, OsString},
     fs,
-    os::{fd::RawFd, unix::fs::PermissionsExt},
-    path::PathBuf,
+    os::fd::RawFd,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    path::{Path, PathBuf},
 };
 
 use nix::{
@@ -20,30 +20,12 @@ pub enum SpawnOutcome {
 
 pub fn spawn_and_wait(
     cmd: &str,
+    search_path: &OsStr,
     cmd_cstr: &CString,
     args: &[CString],
     env_cstrs: &[CString],
 ) -> Result<SpawnOutcome, String> {
-    let child_pid = match spawn_process(
-        cmd_cstr,
-        [cmd_cstr]
-            .into_iter()
-            .chain(args.iter())
-            .cloned()
-            .collect::<Vec<_>>(),
-        env_cstrs,
-    ) {
-        Ok(child_pid) => child_pid,
-        Err(Errno::ENOEXEC) => spawn_shell_fallback(cmd, args, env_cstrs)?,
-        Err(err) => {
-            return Err(match err {
-                Errno::ENOENT => format!("{cmd}: command not found"),
-                Errno::EACCES => format!("{cmd}: Permission denied"),
-                Errno::ENAMETOOLONG => format!("execvp: {cmd}: path too long"),
-                _ => format!("posix_spawnp: {}", err.desc()),
-            })
-        }
-    };
+    let child_pid = spawn_resolved(cmd, search_path, cmd_cstr, args, env_cstrs)?;
 
     loop {
         match waitpid(Some(child_pid), None) {
@@ -62,9 +44,71 @@ pub fn spawn_and_wait(
     }
 }
 
-fn spawn_process(
+fn spawn_resolved(
+    cmd: &str,
+    search_path: &OsStr,
     cmd_cstr: &CString,
-    argv: Vec<CString>,
+    args: &[CString],
+    env_cstrs: &[CString],
+) -> Result<nix::unistd::Pid, String> {
+    if cmd.is_empty() {
+        return Err(String::from(": command not found"));
+    }
+
+    let argv = build_argv(cmd_cstr, args);
+    let mut long_path_warnings = Vec::new();
+
+    if cmd.contains('/') {
+        let path = Path::new(cmd);
+        return match spawn_process(path, &argv, env_cstrs) {
+            Ok(child_pid) => Ok(child_pid),
+            Err(Errno::ENOEXEC) => spawn_shell_fallback(path, args, env_cstrs),
+            Err(err) => Err(render_spawn_error(cmd, err)),
+        };
+    }
+
+    let mut saw_eacces = false;
+
+    for entry in path_entries(search_path) {
+        let path = joined_candidate(&entry, cmd);
+        match spawn_process(&path, &argv, env_cstrs) {
+            Ok(child_pid) => {
+                emit_path_search_warnings(&long_path_warnings);
+                return Ok(child_pid);
+            }
+            Err(Errno::ENOEXEC) => {
+                emit_path_search_warnings(&long_path_warnings);
+                return spawn_shell_fallback(&path, args, env_cstrs);
+            }
+            Err(Errno::ENOENT | Errno::ENOTDIR) => continue,
+            Err(Errno::EACCES) => saw_eacces = true,
+            Err(Errno::ENAMETOOLONG) => long_path_warnings.push(entry),
+            Err(err) => {
+                emit_path_search_warnings(&long_path_warnings);
+                return Err(render_spawn_error(cmd, err));
+            }
+        }
+    }
+
+    emit_path_search_warnings(&long_path_warnings);
+    if saw_eacces {
+        Err(format!("{cmd}: Permission denied"))
+    } else {
+        Err(format!("{cmd}: command not found"))
+    }
+}
+
+fn build_argv(cmd_cstr: &CString, args: &[CString]) -> Vec<CString> {
+    [cmd_cstr]
+        .into_iter()
+        .chain(args.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+}
+
+fn spawn_process<P: ?Sized + nix::NixPath>(
+    path: &P,
+    argv: &[CString],
     env_cstrs: &[CString],
 ) -> Result<nix::unistd::Pid, Errno> {
     let mut file_actions = spawn::PosixSpawnFileActions::init().map_err(|_| Errno::EINVAL)?;
@@ -72,8 +116,8 @@ fn spawn_process(
         file_actions.add_close(fd).map_err(|_| Errno::EINVAL)?;
     }
 
-    spawn::posix_spawnp(
-        cmd_cstr.as_c_str(),
+    spawn::posix_spawn(
+        path,
         &file_actions,
         &spawn::PosixSpawnAttr::init().map_err(|_| Errno::EINVAL)?,
         &argv
@@ -88,39 +132,53 @@ fn spawn_process(
 }
 
 fn spawn_shell_fallback(
-    cmd: &str,
+    path: &Path,
     args: &[CString],
     env_cstrs: &[CString],
 ) -> Result<nix::unistd::Pid, String> {
-    let script_path =
-        resolve_shell_fallback_path(cmd).ok_or_else(|| format!("{cmd}: command not found"))?;
-    let shell_cstr = CString::new("/bin/sh").map_err(|_| String::from("invalid shell path"))?;
     let shell_argv0 = CString::new("sh").map_err(|_| String::from("invalid shell argv"))?;
-    let script_cstr = CString::new(script_path).map_err(|_| String::from("invalid script path"))?;
+    let script_cstr = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| String::from("invalid script path"))?;
     let argv = [shell_argv0, script_cstr]
         .into_iter()
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
 
-    spawn_process(&shell_cstr, argv, env_cstrs).map_err(|err| format!("posix_spawnp: {err}"))
+    spawn_process(Path::new("/bin/sh"), &argv, env_cstrs)
+        .map_err(|err| format!("posix_spawn: {err}"))
 }
 
-fn resolve_shell_fallback_path(cmd: &str) -> Option<String> {
-    if cmd.contains('/') {
-        return Some(cmd.to_string());
+fn render_spawn_error(cmd: &str, err: Errno) -> String {
+    match err {
+        Errno::ENOENT => format!("{cmd}: command not found"),
+        Errno::EACCES => format!("{cmd}: Permission denied"),
+        Errno::ENAMETOOLONG => format!("execvp: {cmd}: path too long"),
+        _ => format!("posix_spawn: {}", err.desc()),
     }
+}
 
-    env::var("PATH").ok().and_then(|path| {
-        path.split(':').find_map(|entry| {
-            let base = if entry.is_empty() { "." } else { entry };
-            let candidate = PathBuf::from(base).join(cmd);
-            let metadata = candidate.metadata().ok()?;
-            if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
-                return None;
+fn emit_path_search_warnings(entries: &[OsString]) {
+    for entry in entries {
+        eprintln!("execvp: {}: path too long", Path::new(entry).display());
+    }
+}
+
+fn path_entries(search_path: &OsStr) -> Vec<OsString> {
+    search_path
+        .as_bytes()
+        .split(|byte| *byte == b':')
+        .map(|entry| {
+            if entry.is_empty() {
+                OsString::from(".")
+            } else {
+                OsString::from_vec(entry.to_vec())
             }
-            Some(candidate.to_string_lossy().into_owned())
         })
-    })
+        .collect()
+}
+
+fn joined_candidate(base: &OsStr, cmd: &str) -> PathBuf {
+    PathBuf::from(base).join(cmd)
 }
 
 fn inherited_fds() -> Result<Vec<RawFd>, std::io::Error> {

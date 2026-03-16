@@ -98,7 +98,7 @@ fn execute(opts: Execute) {
         target_passwd(opts.target_uid).unwrap_or_else(|err| print_error_and_exit(&err, 1));
 
     let cmd = selected_command(opts.cmd.clone(), &passwd);
-    let decision = rules.decide(
+    let matched_rule = rules.matched_rule(
         &passwd.name,
         passwd.uid.into(),
         &groups,
@@ -107,6 +107,10 @@ fn execute(opts: Execute) {
         &opts.args,
         opts.target_uid,
     );
+    let decision = Decision::from_rule(matched_rule);
+    let restricted_cmd = matched_rule
+        .and_then(|rule| rule.command.as_ref())
+        .is_some();
 
     let rule_opts = match decision {
         Decision::Deny => {
@@ -125,6 +129,7 @@ fn execute(opts: Execute) {
         rule_opts: &rule_opts,
         source_env: &source_env,
         former_path: former_path.as_os_str(),
+        restricted_cmd,
     };
 
     let timestamp = if rule_opts.persist {
