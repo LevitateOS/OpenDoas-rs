@@ -10,6 +10,8 @@ use crate::policy::rule::{EnvDirective, RuleOpts};
 
 use super::path::SAFE_PATH;
 
+const KEEPENV_NAME_LIMIT: usize = 1023;
+
 pub type SourceEnv = BTreeMap<OsString, OsString>;
 
 pub fn collect_source_env(vars: impl IntoIterator<Item = (OsString, OsString)>) -> SourceEnv {
@@ -59,6 +61,9 @@ pub fn build_exec_env(
 
     if rule_opts.keepenv {
         for (key, value) in source_env {
+            if !is_valid_keepenv_name(key) {
+                continue;
+            }
             env_map.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
@@ -116,9 +121,14 @@ fn assigned_value(value: &str, source_env: &SourceEnv, former_path: &OsStr) -> O
     }
 }
 
+fn is_valid_keepenv_name(name: &OsStr) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty() && bytes.len() <= KEEPENV_NAME_LIMIT
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_exec_env, collect_source_env, env_cstr, SourceEnv};
+    use super::{build_exec_env, collect_source_env, env_cstr, SourceEnv, KEEPENV_NAME_LIMIT};
     use crate::RuleOpts;
     use pwd_grp::Passwd;
     use std::{
@@ -193,5 +203,65 @@ mod tests {
             source_env.get(OsStr::new("DISPLAY")),
             Some(&OsString::from(":1"))
         );
+    }
+
+    #[test]
+    fn build_exec_env_keepenv_ignores_empty_names() {
+        let source = sample_passwd("alice", "/home/alice", "/bin/sh");
+        let target = sample_passwd("root", "/root", "/bin/sh");
+        let source_env = collect_source_env([
+            (OsString::from("DISPLAY"), OsString::from(":1")),
+            (OsString::from(""), OsString::from("ignored")),
+        ]);
+        let mut rule_opts = default_rule_opts();
+        rule_opts.keepenv = true;
+
+        let env = build_exec_env(
+            &source,
+            &target,
+            &rule_opts,
+            &source_env,
+            OsString::from("/usr/bin").as_os_str(),
+        )
+        .expect("expected env build to succeed");
+
+        assert!(!env
+            .iter()
+            .any(|entry| entry.as_c_str().to_bytes() == b"=ignored"));
+        assert!(env
+            .iter()
+            .any(|entry| entry.as_c_str().to_bytes() == b"DISPLAY=:1"));
+    }
+
+    #[test]
+    fn build_exec_env_keepenv_ignores_overlong_names() {
+        let source = sample_passwd("alice", "/home/alice", "/bin/sh");
+        let target = sample_passwd("root", "/root", "/bin/sh");
+        let overlong_name = "A".repeat(KEEPENV_NAME_LIMIT + 1);
+        let source_env = collect_source_env([
+            (OsString::from("DISPLAY"), OsString::from(":1")),
+            (OsString::from(&overlong_name), OsString::from("ignored")),
+        ]);
+        let mut rule_opts = default_rule_opts();
+        rule_opts.keepenv = true;
+
+        let env = build_exec_env(
+            &source,
+            &target,
+            &rule_opts,
+            &source_env,
+            OsString::from("/usr/bin").as_os_str(),
+        )
+        .expect("expected env build to succeed");
+
+        assert!(!env.iter().any(|entry| {
+            entry
+                .as_c_str()
+                .to_bytes()
+                .starts_with(overlong_name.as_bytes())
+        }));
+        assert!(env
+            .iter()
+            .any(|entry| entry.as_c_str().to_bytes() == b"DISPLAY=:1"));
     }
 }
