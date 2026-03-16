@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, ffi::OsString};
 
 use getopt::Opt;
 
@@ -27,7 +27,7 @@ pub struct Execute {
 
 impl Command {
     pub fn new() -> Self {
-        Self::new_from(std::env::args())
+        Self::new_from_os(std::env::args_os())
     }
 
     pub fn new_from(args: impl Iterator<Item = String>) -> Self {
@@ -104,6 +104,10 @@ impl Command {
         }
     }
 
+    pub fn new_from_os(args: impl Iterator<Item = OsString>) -> Self {
+        Self::new_from(args.map(|arg| arg.to_string_lossy().into_owned()))
+    }
+
     pub fn mode(&self) -> Mode {
         match self {
             Command::Deauth => Mode::Deauth,
@@ -117,5 +121,31 @@ impl Command {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::{Command, Execute};
+
+    #[test]
+    fn parses_non_utf8_argv_without_panicking() {
+        let command = Command::new_from_os(
+            [
+                OsString::from("doas"),
+                OsStringExt::from_vec(vec![0xff]),
+                OsString::from("--flag"),
+            ]
+            .into_iter(),
+        );
+
+        let Command::Execute(Execute { cmd, args, .. }) = command else {
+            panic!("expected execute command");
+        };
+        assert_eq!(cmd.as_deref(), Some("\u{fffd}"));
+        assert_eq!(args, vec![String::from("--flag")]);
     }
 }

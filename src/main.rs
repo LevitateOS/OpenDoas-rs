@@ -22,6 +22,7 @@ use open_doas_rs::{
     auth::*,
     command::*,
     exec::{
+        env::{collect_source_env, SourceEnv},
         privilege::{drop_to_real_uid, ensure_setuid_root},
         run::{current_dir_label, execute_plan, ExecutionPlan},
         shell::selected_command,
@@ -32,10 +33,10 @@ use open_doas_rs::{
     platform::{current_group_info, current_passwd, target_passwd},
     policy::{command::get_cmdline, Decision},
 };
+use std::env;
 use std::ffi::CStr;
 #[cfg(auth = "pam")]
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::{collections::HashMap, env};
 
 #[cfg(auth = "pam")]
 static CAUGHT_SESSION_SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -68,8 +69,11 @@ fn execute(opts: Execute) {
 
     let passwd = current_passwd().unwrap_or_else(|err| print_error_and_exit(&err, 1));
     let rules = load_rules(&config_request).unwrap_or_else(|err| print_error_and_exit(&err, 1));
-    let source_env: HashMap<String, String> = env::vars().collect();
-    let former_path = source_env.get("PATH").cloned().unwrap_or_default();
+    let source_env: SourceEnv = collect_source_env(env::vars_os());
+    let former_path = source_env
+        .get(std::ffi::OsStr::new("PATH"))
+        .cloned()
+        .unwrap_or_default();
     let (groups, gids) =
         current_group_info(passwd.gid.into()).unwrap_or_else(|err| print_error_and_exit(&err, 1));
     if config_request.only_check {
@@ -120,7 +124,7 @@ fn execute(opts: Execute) {
         args: &opts.args,
         rule_opts: &rule_opts,
         source_env: &source_env,
-        former_path: &former_path,
+        former_path: former_path.as_os_str(),
     };
 
     let timestamp = if rule_opts.persist {

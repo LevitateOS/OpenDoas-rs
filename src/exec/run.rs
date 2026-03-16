@@ -1,10 +1,10 @@
-use std::{collections::HashMap, env};
+use std::{env, ffi::OsStr};
 
 use pwd_grp::Passwd;
 
 use crate::{
     exec::{
-        env::build_exec_env,
+        env::{build_exec_env, SourceEnv},
         path::reset_process_path,
         privilege::switch_to_target,
         spawn::{spawn_and_wait, SpawnOutcome},
@@ -20,8 +20,8 @@ pub struct ExecutionPlan<'a> {
     pub command: &'a str,
     pub args: &'a [String],
     pub rule_opts: &'a RuleOpts,
-    pub source_env: &'a HashMap<String, String>,
-    pub former_path: &'a str,
+    pub source_env: &'a SourceEnv,
+    pub former_path: &'a OsStr,
 }
 
 impl ExecutionPlan<'_> {
@@ -55,7 +55,7 @@ pub fn execute_plan(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, String> {
         plan.rule_opts,
         plan.source_env,
         plan.former_path,
-    );
+    )?;
 
     switch_to_target(plan.target)?;
     reset_process_path();
