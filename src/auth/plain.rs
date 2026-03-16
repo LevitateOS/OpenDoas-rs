@@ -1,11 +1,10 @@
 use std::ffi::{CStr, CString};
 
-use nix;
 use pwd_grp;
 use rpassword::read_password;
 use shadow::Shadow;
 
-use crate::platform::tty::write_prompt_to_tty;
+use crate::{auth::prompt::password_prompt, platform::tty::write_prompt_to_tty};
 
 #[link(name = "crypt")]
 extern "C" {
@@ -15,9 +14,7 @@ extern "C" {
 pub fn challenge_user(passwd: &pwd_grp::Passwd) -> Result<(), &'static str> {
     let hash = load_password_hash(passwd)?;
 
-    let hostname = nix::unistd::gethostname().expect("Failed to get hostname");
-    let hostname = hostname.into_string().expect("Hostname is not valid UTF-8");
-    let prompt = format!("\rdoas ({}@{}) password: ", &passwd.name, &hostname);
+    let prompt = password_prompt(&passwd.name);
     write_prompt_to_tty(&prompt).map_err(|_| "a tty is required")?;
     let response = match read_password() {
         Ok(value) => value,

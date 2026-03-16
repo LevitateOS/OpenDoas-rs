@@ -1,6 +1,7 @@
 //! Execution-time behavior.
 
 pub mod env;
+pub mod fds;
 pub mod path;
 pub mod privilege;
 pub mod run;

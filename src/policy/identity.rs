@@ -30,3 +30,22 @@ pub fn matches_identity<G: AsRef<str>>(
 pub fn matches_target(target_spec: &str, target_uid: u32) -> bool {
     parse_uid_spec(target_spec) == Some(target_uid)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::matches_identity;
+    use crate::policy::rule::RuleIdentity;
+
+    #[test]
+    fn numeric_group_rule_matches_without_resolved_names() {
+        let identity = RuleIdentity::Group(String::from("4242"));
+
+        assert!(matches_identity(
+            &identity,
+            "alice",
+            1000,
+            &[] as &[&str],
+            &[4242]
+        ));
+    }
+}

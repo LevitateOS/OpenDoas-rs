@@ -1,5 +1,7 @@
 //! Authentication backends.
 
+pub mod prompt;
+
 #[cfg(auth = "none")]
 pub mod none;
 #[cfg(auth = "pam")]

@@ -62,18 +62,17 @@ pub fn load_rules(request: &ConfigRequest) -> Result<Rules, String> {
     }
 
     let mut config = String::new();
-    file.read_to_string(&mut config)
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::IsADirectory {
-                String::from("input error reading config at line 1")
-            } else {
-                format!(
-                    "could not read config file {}: {}",
-                    request.path,
-                    format_io_error(&err)
-                )
-            }
-        })?;
+    file.read_to_string(&mut config).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::IsADirectory {
+            String::from("input error reading config at line 1")
+        } else {
+            format!(
+                "could not read config file {}: {}",
+                request.path,
+                format_io_error(&err)
+            )
+        }
+    })?;
 
     Rules::try_from(config.as_str()).map_err(|err| err.to_string())
 }

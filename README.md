@@ -26,18 +26,32 @@ Additional operational and release guidance:
 - [Versioning and changelog policy](./docs/VERSIONING.md)
 - [Production readiness](./PRODUCTION-READINESS.md)
 
-### PAM authentication
+### Authentication Backends
 
-PAM authentication is the default authentication method and it requires you to manually setup an acceptable PAM configuration for your system if you are planning to use it directly after building it yourself.
+For Linux OpenDoas parity, PAM should be treated as a first-class supported
+backend, but it is not the definition of `doas` and it is not the only auth
+path used by upstream OpenDoas.
 
-It is not wise to ship a "default" PAM configuration since it is specific to your operating system's distribution and it's simply not safe or productive to ship and install those config files.
+Current project position:
 
-A good starting point for the PAM configuration could be your distribution's configuration for `doas` (usually `/etc/pam.d/doas`) or `sudo` (usually `/etc/pam.d/sudo`). The service name is set to `opendoas-rs` for the purposes of PAM authentication.
+- `auth-pam` is an important target backend for Linux deployments
+- `auth-plain` is the primary verified path in the current host build and test
+  workflow
+- neither backend should be described as "the default" unless code, CI, and
+  packaging all make that true
 
-As an example, this is what I have configured in my Arch Linux system:
+If you build and deploy the PAM backend yourself, you must also provide a PAM
+service configuration appropriate for your distribution.
+
+It is not wise to ship a guessed PAM file across distributions. A good starting
+point is your system's `doas` or `sudo` PAM configuration.
+
+The current code uses the PAM service name `doas`.
+
+As an example, this is what I have configured on Arch Linux:
 ```
 $ # Inspired from Arch Linux's `opendoas` config
-$ cat /etc/pam.d/opendoas-rs
+$ cat /etc/pam.d/doas
 #%PAM-1.0
 auth            include         system-auth
 account         include         system-auth

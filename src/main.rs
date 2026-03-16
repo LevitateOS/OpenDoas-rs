@@ -23,6 +23,7 @@ use open_doas_rs::{
     command::*,
     exec::{
         env::{collect_source_env, SourceEnv},
+        fds::close_inherited_fds_from,
         privilege::{drop_to_real_uid, ensure_setuid_root},
         run::{current_dir_label, execute_plan, ExecutionPlan},
         shell::selected_command,
@@ -47,6 +48,10 @@ extern "C" fn catch_session_signal(signal: libc::c_int) {
 }
 
 fn main() {
+    if let Err(err) = close_inherited_fds_from(libc::STDERR_FILENO) {
+        print_error_and_exit(&err, 1);
+    }
+
     match Command::new() {
         Command::Execute(opts) => execute(opts),
         Command::Deauth => {
@@ -170,7 +175,13 @@ fn execute(opts: Execute) {
             }
         };
         run_result = {
-            let mut pam_context = transaction.into_context();
+            let mut pam_context = match transaction.into_context() {
+                Ok(context) => context,
+                Err(msg) => {
+                    log_auth_failure(&passwd.name, msg);
+                    print_error_and_exit(msg, 1);
+                }
+            };
             let pam_session = pam_context
                 .open_session(pam_client::Flag::NONE)
                 .unwrap_or_else(|err| print_error_and_exit(&format!("pam_open_session: {err}"), 1));
@@ -235,6 +246,7 @@ fn run_permitted_command(plan: &ExecutionPlan<'_>) -> Result<SpawnOutcome, Strin
     execute_plan(plan)
 }
 
+#[cfg(any(auth = "pam", auth = "plain"))]
 fn log_auth_failure(user: &str, msg: &str) {
     match msg {
         "Authentication failed" => log_failed_auth(user),

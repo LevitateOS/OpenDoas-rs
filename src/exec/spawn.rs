@@ -1,6 +1,5 @@
 use std::{
     ffi::{CString, OsStr, OsString},
-    fs,
     os::fd::RawFd,
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
@@ -11,6 +10,8 @@ use nix::{
     spawn,
     sys::wait::{waitpid, WaitStatus},
 };
+
+use super::fds::inherited_fds_from;
 
 #[derive(Debug)]
 pub enum SpawnOutcome {
@@ -182,20 +183,5 @@ fn joined_candidate(base: &OsStr, cmd: &str) -> PathBuf {
 }
 
 fn inherited_fds() -> Result<Vec<RawFd>, std::io::Error> {
-    let mut fds = Vec::new();
-    for entry in fs::read_dir("/proc/self/fd")? {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(fd) = name.parse::<RawFd>() else {
-            continue;
-        };
-        if fd > libc::STDERR_FILENO {
-            fds.push(fd);
-        }
-    }
-    fds.sort_unstable();
-    fds.dedup();
-    Ok(fds)
+    inherited_fds_from(libc::STDERR_FILENO)
 }

@@ -5,9 +5,11 @@ This document covers direct installation of `OpenDoas-rs` from source.
 ## Supported Auth Modes
 
 - `auth-pam`
-  Default build mode. Best fit for most Linux distributions.
+  First-class target backend for Linux OpenDoas parity. Requires PAM
+  development headers and a distro-appropriate PAM service file.
 - `auth-plain`
-  Shadow/password-file based authentication for environments without PAM.
+  Shadow/password-file based authentication. This is the current primary
+  verified host build path in this project.
 - `auth-none`
   Test-only or tightly controlled environments. Not suitable for general
   privileged use.
@@ -20,16 +22,38 @@ Minimum source build requirements:
 - C toolchain
 - `pkg-config`
 - for `auth-pam`:
-  `linux-pam` development headers
+  `linux-pam` development headers plus a working `bindgen`/libclang toolchain
 - for `auth-plain`:
   libc/shadow support available on the target system
 
+On Alpine, the practical `auth-pam` host prerequisites are:
+
+```sh
+doas apk add linux-pam linux-pam-dev clang21 clang21-libclang llvm21-dev pkgconf
+```
+
+and, when invoking Cargo directly:
+
+```sh
+export LLVM_CONFIG_PATH=/usr/bin/llvm-config-21
+export LIBCLANG_PATH=/usr/lib/llvm21/lib
+```
+
 ## Build Commands
 
-Default PAM build:
+Current default source build:
 
 ```sh
 cargo build --release --locked
+```
+
+At the moment this follows the Cargo default feature set, which is
+`auth-plain`, not `auth-pam`.
+
+Explicit PAM build:
+
+```sh
+AUTH_MODE=pam cargo build --release --locked --no-default-features --features auth-pam
 ```
 
 Explicit plain-auth build:
@@ -63,9 +87,10 @@ permit nopass root as root
 
 ## PAM Configuration
 
-`OpenDoas-rs` uses the PAM service name `opendoas-rs`.
+The current code uses the PAM service name `doas`.
 
-You must create `/etc/pam.d/opendoas-rs` yourself. Start from your
+If you build the PAM backend yourself, you must create `/etc/pam.d/doas`
+yourself. Start from your
 distribution's `doas` or `sudo` PAM file and adapt as needed.
 
 Arch-style starting point:
@@ -78,6 +103,14 @@ session         include         system-auth
 ```
 
 Do not ship a guessed PAM file from another distribution unchanged.
+
+Note:
+
+- this project aims to treat PAM as a first-class backend for Linux OpenDoas
+  parity
+- that does not mean PAM is the only supported auth path
+- today, the plain/shadow backend is still the more consistently verified host
+  build path
 
 ## First Validation
 

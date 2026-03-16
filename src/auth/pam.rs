@@ -1,11 +1,10 @@
 use std::ffi::{CStr, CString};
 
-use nix;
 use pam_client::{Context, ConversationHandler, ErrorCode, Flag};
 use pwd_grp::Passwd;
 use rpassword::prompt_password;
 
-use crate::platform::tty::current_tty_name;
+use crate::{auth::prompt::password_prompt, platform::tty::current_tty_name};
 
 pub struct Converser<'a> {
     pub username: &'a str,
@@ -17,11 +16,9 @@ impl ConversationHandler for Converser<'_> {
     }
 
     fn prompt_echo_off(&mut self, msg: &CStr) -> Result<CString, ErrorCode> {
-        let hostname = nix::unistd::gethostname().expect("Failed to get hostname");
-        let hostname = hostname.into_string().expect("Hostname is not valid UTF-8");
         let msg = msg.to_string_lossy();
         let prompt = if msg == "Password:" || msg == "Password: " {
-            format!("\rdoas ({}@{}) password: ", &self.username, &hostname)
+            password_prompt(self.username)
         } else {
             msg.into_owned()
         };
@@ -59,7 +56,8 @@ impl<'a> Transaction<'a> {
         let converser = Converser {
             username: &source_passwd.name,
         };
-        let mut context = Context::new("doas", None, converser).expect("Failed to initialize PAM");
+        let mut context =
+            Context::new("doas", None, converser).map_err(|_| "Authentication failed")?;
 
         context
             .set_ruser(Some(&source_passwd.name))
@@ -99,7 +97,22 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    pub fn into_context(mut self) -> Context<Converser<'a>> {
-        self.context.take().expect("missing PAM context")
+    pub fn into_context(mut self) -> Result<Context<Converser<'a>>, &'static str> {
+        self.context.take().ok_or("Authentication failed")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Transaction;
+
+    #[test]
+    fn missing_context_is_error_not_panic() {
+        let transaction = Transaction::new();
+
+        assert_eq!(
+            transaction.into_context().err(),
+            Some("Authentication failed")
+        );
     }
 }
