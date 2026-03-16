@@ -45,7 +45,7 @@ pub fn log_tty_required(user: &str) {
 
 pub fn log_permitted_command(user: &str, cmdline: &str, target: &str, cwd: &str) {
     let msg = format!(
-        "{} was permitted to run command {} as {} from {}",
+        "{} ran command {} as {} from {}",
         user, cmdline, target, cwd
     );
     syslog_message(libc::LOG_AUTHPRIV | libc::LOG_INFO, &msg);
